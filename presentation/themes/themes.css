@@ -1,0 +1,287 @@
+/* @theme default_theme */
+@import "./config.css";
+
+/* =========================================================
+   1. BASE SLIDE & THEME TOGGLE
+   ========================================================= */
+section {
+    background-color: var(--dark-bg);
+    color: var(--dark-text);
+    font-family: 'Helvetica', Arial, sans-serif;
+    padding: 60px 80px 160px 80px; /* Increased bottom padding for footer space */
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+
+    /* Logic Mapping: These update when .light is added */
+    --text: var(--dark-text);
+    --i-main: var(--l-inst-main-d);
+    --d-main: var(--l-dept-main-d);
+    --i-ico: var(--l-inst-icon-d);
+    --d-ico: var(--l-dept-icon-d);
+}
+
+section.light {
+    background-color: var(--light-bg) !important;
+    color: var(--light-text) !important;
+    --text: var(--light-text);
+    --i-main: var(--l-inst-main-l);
+    --d-main: var(--l-dept-main-l);
+    --i-ico: var(--l-inst-icon-l);
+    --d-ico: var(--l-dept-icon-l);
+}
+
+/* =========================================================
+   2. TITLE SLIDE: BIG LOGOS LEFT & RIGHT
+   ========================================================= */
+section.title::before {
+    content: "";
+    position: absolute;
+    top: 100px;
+    left: 80px;
+    right: 80px;
+    height: 150px;
+    /* Use the dynamic variables so they swap in light mode */
+    background-image: var(--i-main), var(--d-main);
+    background-repeat: no-repeat, no-repeat;
+    background-position: left center, right center;
+    background-size: auto 120px, auto 120px; /* Aspect ratio preserved */
+    z-index: 100;
+}
+
+section.title h1,
+section.title h2 {
+    text-align: center;
+}
+
+/* =========================================================
+   3. FOOTER (Pure CSS)
+   ========================================================= */
+footer {
+    display: block !important;
+    position: absolute;
+    bottom: 40px;
+    left: 80px;
+    right: 80px;
+    height: 80px;
+    border-top: 1px solid var(--text);
+    background: transparent;
+    z-index: 100;
+    color: transparent; /* Hides default placeholder text */
+}
+
+/* Left side: [Inst Icon][Dept Icon][Presenter Name + Font Spec] */
+footer::before {
+    content: var(--presenter-name);
+    white-space: pre; /* Allows line breaks if needed */
+    position: absolute;
+    top: 20%;
+    left: 0;
+    height: 50px;
+    padding-left: 160px; /* Space for both icon logos */
+    
+    font-size: 10.5pt;
+    color: var(--text);
+    line-height: 1.2;
+    text-align: left;
+    
+    background-image: var(--i-ico), var(--d-ico);
+    background-repeat: no-repeat, no-repeat;
+    background-position: 0 center, 80px center; /* 40px space between logos*/
+    background-size: auto 50px, auto 50px;
+}
+
+/* Footer Right: Short title with line breaks if too long */
+footer::after {
+    content: var(--presentation-title-short);
+    position: absolute;
+    top: 20%;
+    right: 40px;        /* leave space for the page number */
+    max-width: 300px;   /* adjust as needed */
+    white-space: pre-line; /* allows line breaks if text wraps */
+    font-size: 10pt;
+    color: var(--text);
+    line-height: 1.3;
+    text-align: right;
+    overflow-wrap: break-word; /* ensures long words wrap */
+}
+
+/* =========================================================
+   4. PAGINATION (Precisely Aligned to Footer Baseline)
+   ========================================================= */
+section::after {
+    content: attr(data-marpit-pagination);
+    position: absolute;
+    
+    /* Precision Calculation:
+       Footer starts at 40px. Footer height is 80px. 
+       Text inside footer starts at top: 25px.
+       Slide bottom to text baseline = 40 + (80 - 25. - ~font_height)
+    Your calculations are worng these are the values*/
+    bottom: -72px; 
+    right: 0px; /* Locked to right margin */
+    
+    font-size: 10pt;
+    font-weight: bold;
+    color: var(--text);
+    z-index: 101;
+}
+
+
+/* =========================================================
+   5. TITLE SLIDE TEXT
+   ========================================================= */
+/* Title slide layout */
+section.title {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    background-color: var(--dark-bg); /* or swap dynamically for light mode */
+    color: var(--dark-text);
+    padding: 60px 80px 160px 80px; /* bottom space for normal slides */
+}
+
+/* Title slide logos (top left/right) */
+section.title::before {
+    content: "";
+    position: absolute;
+    top: 100px;
+    left: 80px;
+    right: 80px;
+    height: 150px;
+    background-image: var(--i-main), var(--d-main);
+    background-repeat: no-repeat, no-repeat;
+    background-position: left center, right center;
+    background-size: auto 120px, auto 120px;
+    z-index: 100;
+}
+
+/* Title text styling */
+section.title h1 {
+    margin-top: 220px; /* pushed below logos */
+    font-size: 60pt;
+    font-weight: bold;
+    text-align: center;
+}
+
+section.title h2 {
+    font-size: 25pt;
+    opacity: 0.8;
+    margin-top: 10px;
+    text-align: center;
+}
+
+/* Pull title/subtitle dynamically from CSS variables */
+section.title h1::before {
+    content: var(--presentation-title);
+}
+
+section.title h2::before {
+    content: var(--presentation-subtitle);
+}
+
+/* Add presenter name dynamically below subtitle */
+section.title h2::after {
+    content: var(--presenter-name-full);
+    display: block;
+    margin-top: 40px;     /* space below subtitle */
+    font-size: 14pt;
+    font-weight: normal;
+    opacity: 0.8;
+    text-align: center;
+}
+
+/* Completely hide footer and its pseudo-elements on title slide */
+section.title footer,
+section.title footer::before,
+section.title footer::after {
+    display: none !important;
+}
+
+/* Hide Marp pagination on title slide */
+section.title::after {
+    content: "" !important;
+    display: none !important;
+}
+
+/* =========================================================
+   6. LAST SLIDE
+   ========================================================= */
+
+section.last {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    background-color: var(--dark-bg);
+    color: var(--dark-text);
+    padding: 60px 80px 80px 80px; /* bottom padding */
+}
+
+/* Logos/images at top left/right */
+section.last::before {
+    content: "";
+    position: absolute;
+    top: 100px;          /* same as title slide logos */
+    left: 80px;
+    right: 80px;
+    height: 150px;       /* same as title slide */
+    background-image: var(--i-main), var(--d-main);
+    background-repeat: no-repeat, no-repeat;
+    background-position: left center, right center;
+    background-size: auto 120px, auto 120px;
+    z-index: 100;
+}
+
+/* Main heading (Markdown h1) centered at same position as title slide */
+section.last h1 {
+    margin-top: 220px;   /* same vertical position as title slide */
+    font-size: 60pt;
+    font-weight: bold;
+    text-align: center;
+}
+
+/* Optional subtitle (Markdown h2) */
+section.last h2 {
+    font-size: 25pt;
+    opacity: 0.8;
+    margin-top: 10px;
+    text-align: center;
+}
+
+/* Right-aligned additional text (like contact info) */
+section.last p,
+section.last li {
+    margin-top: auto;      /* push to bottom of the slide */
+    text-align: right;     /* align to right */
+    font-size: 20pt;
+    opacity: 0.8;
+}
+
+/* Hide footer and pagination completely */
+section.last footer,
+section.last footer::before,
+section.last footer::after,
+section.last::after {
+    display: none !important;
+}
+
+/* =========================================================
+   7. MAPS
+   ========================================================= */
+
+/* Make iframe consume remaining vertical space */
+section iframe.map-frame {
+    flex: 1;
+    width: 100%;
+    border: none;
+    margin-top: 20px;
+}
+
+
+/* =========================================================
+   8. TYPOGRAPHY & OVERRIDES
+   ========================================================= */
+h1 { font-size: 45pt; margin-bottom: 20px; }
+p, li { font-size: 25pt; }

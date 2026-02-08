@@ -9,13 +9,13 @@ import json
 import sys
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 # Add parent directory to path so we can import ranking_agent
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from ranking_agent import rank_facilities
+from ranking_agent import rank_facilities, rank_facilities_gdf
 
 app = FastAPI(
     title="GeoCare Facility API",
@@ -74,6 +74,27 @@ async def search_facilities(request: SearchRequest):
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
 
+@app.post("/search/geojson")
+async def search_facilities_geojson(request: SearchRequest):
+    """
+    Search for facilities and return GeoJSON for map display.
+    
+    Returns GeoJSON FeatureCollection with facility locations and scores.
+    """
+    if not request.query.strip():
+        raise HTTPException(status_code=400, detail="Query cannot be empty")
+    
+    try:
+        gdf = rank_facilities_gdf(request.query)
+        # Filter to only rows with valid geometry
+        gdf = gdf[gdf["geometry"].notna()]
+        geojson = gdf.to_json()
+        return Response(content=geojson, media_type="application/geo+json")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+

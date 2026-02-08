@@ -27,7 +27,10 @@ import {
   CheckCircle,
   Pin,
   Pencil,
+  Star,
   HelpCircle,
+  ExternalLink,
+  Navigation,
   MousePointer2 
 } from "lucide-react";
 import "leaflet/dist/leaflet.css";
@@ -67,10 +70,25 @@ const WelcomeModal = ({ onClose }) => {
           <p className="text-slate-600 text-lg mb-6 leading-relaxed">
             Explore and ask about healthcare facilities with our interactive AI mapping tool.
           </p>
-          <div className="space-y-4 mb-8">
+    
+           <div className="space-y-4 mb-8">
             <div className="flex items-start gap-3">
-              <div className="p-2 bg-slate-50 rounded-lg border border-slate-100"><Search className="w-4 h-4 text-blue-500" /></div>
-              <div><h4 className="font-semibold text-slate-800">Search bar</h4><p className="text-sm text-slate-500">Ask question related to healthcare facilities.</p></div>
+              <div className="p-2 bg-slate-50 rounded-lg border border-slate-100">
+                <Search className="w-4 h-4 text-blue-500" />
+              </div>
+              <div>
+                <h4 className="font-semibold text-slate-800">Search bar</h4>
+                <p className="text-sm text-slate-500">Ask question related to healthcare facilities and nearby locations.</p>
+              </div>
+            </div>
+            <div className="flex items-start gap-3">
+              <div className="p-2 bg-slate-50 rounded-lg border border-slate-100">
+                <Pencil className="w-4 h-4 text-purple-500" />
+              </div>
+              <div>
+                <h4 className="font-semibold text-slate-800">Select Areas</h4>
+                <p className="text-sm text-slate-500">Draw and select specific zones on the map.</p>
+              </div>
             </div>
             <div className="flex items-start gap-3">
               <div className="p-2 bg-slate-50 rounded-lg border border-slate-100"><Pencil className="w-4 h-4 text-purple-500" /></div>
@@ -81,7 +99,10 @@ const WelcomeModal = ({ onClose }) => {
               <div><h4 className="font-semibold text-slate-800">Filter Points</h4><p className="text-sm text-slate-500">Click on the map to save specific POI coordinates.</p></div>
             </div>
           </div>
-          <button onClick={onClose} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl transition-all shadow-lg shadow-blue-600/20 active:scale-[0.98]">
+          <button
+            onClick={onClose}
+            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl transition-all shadow-lg shadow-blue-600/20 active:scale-[0.98]"
+          >
             Start
           </button>
         </div>
@@ -114,11 +135,13 @@ const ConfidenceFilter = ({ value, onChange }) => {
 };
 
 // 3. Map Controller
-function RecenterMap({ lat, lon }) {
+function RecenterMap({ lat, lon, zoom }) {
   const map = useMap();
   useEffect(() => {
-    if (lat && lon) map.flyTo([lat, lon], 13, { duration: 1.5 });
-  }, [lat, lon, map]);
+    if (lat && lon) {
+      map.flyTo([lat, lon], zoom || map.getZoom(), { duration: 1.5 });
+    }
+  }, [lat, lon, zoom, map]);
   return null;
 }
 
@@ -178,7 +201,10 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
   const [showLayers, setShowLayers] = useState(false);
-  const [mapLayer, setMapLayer] = useState('standard');
+  const [mapLayer, setMapLayer] = useState('satellite');
+  
+  // NEW: State to track which card is expanded in the sidebar
+  const [expandedId, setExpandedId] = useState(null);
 
   // Data State
   const [query, setQuery] = useState("");
@@ -199,6 +225,11 @@ export default function App() {
   // Mock Settings
   const [timeRange, setTimeRange] = useState(50);
 
+  // Helper function to format capability strings
+  const formatCapability = (text) => {
+    return text.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+  };
+
   // --- Handlers ---
 
   const handleSearch = async (e) => {
@@ -207,9 +238,26 @@ export default function App() {
     try {
       const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&addressdetails=1&limit=15`);
       const data = await res.json();
-      const enrichedData = data.map(item => ({ ...item, confidenceScore: Math.floor(Math.random() * 5) + 1 }));
+      
+      // MOCK DATA ENRICHMENT: Simulating your backend structure
+      const enrichedData = data.map(item => ({
+        ...item,
+        // Mock backend fields:
+        officialWebsite: Math.random() > 0.6 ? "https://example.com" : null,
+        score: Math.floor(Math.random() * 5) + 1,
+        reason: "National Cardiothoracic Centre performs open heart surgeries as part of a major teaching hospital.",
+        capabilities: [
+            "cancer_screening",
+            "cardiology_services",
+            "emergency_24_7",
+            "general_surgery",
+            "outpatient_services"
+        ].sort(() => 0.5 - Math.random()).slice(0, 3) // Pick 3 random capabilities
+      }));
+
       setResults(enrichedData);
       setSidebarOpen(true);
+      setExpandedId(null); // Reset expanded card on new search
     } catch (error) {
       console.error("Search error:", error);
     }
@@ -263,7 +311,9 @@ export default function App() {
 
   const clearAoi = () => {
     setAoi(null);
-    if (featureGroupRef.current) featureGroupRef.current.clearLayers();
+    if (featureGroupRef.current) {
+      featureGroupRef.current.clearLayers();
+    }
     drawnLayersRef.current.forEach(layer => {
       if (layer && layer._map) layer._map.removeLayer(layer);
     });
@@ -277,7 +327,7 @@ export default function App() {
   };
 
   const filteredResults = useMemo(() => {
-    return results.filter(r => r.confidenceScore >= minConfidence);
+    return results.filter(r => r.score >= minConfidence); // Changed to use 'score' from backend mock
   }, [results, minConfidence]);
 
   return (
@@ -289,7 +339,7 @@ export default function App() {
       <div className={`absolute inset-0 z-0 ${isPointMode ? 'cursor-crosshair' : ''}`}>
         <MapContainer
           center={mapPosition}
-          zoom={13}
+          zoom={8}
           style={{ height: "100%", width: "100%" }}
           zoomControl={false}
           attributionControl={false}
@@ -305,9 +355,8 @@ export default function App() {
           />
           
           <RecenterMap lat={mapPosition[0]} lon={mapPosition[1]} />
-          <ZoomControl position="bottomright" />
-          <AttributionControl position="bottomright" prefix={false} />
-
+          
+          {/* Custom Drawing Logic */}
           <MapDrawHandler 
             isDrawing={isDrawingMode}
             onDrawReady={() => console.log("Ready to draw area")}
@@ -324,7 +373,9 @@ export default function App() {
               <Popup>
                 <div className="p-1">
                    <strong className="block mb-1">{place.display_name.split(',')[0]}</strong>
-                   <span className="text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded">{place.confidenceScore} Star Confidence</span>
+                   <span className="text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded">
+                     {place.score} Star Confidence
+                   </span>
                 </div>
               </Popup>
             </Marker>
@@ -351,7 +402,15 @@ export default function App() {
             <EditControl
               position="topright"
               onCreated={(e) => handleDrawCreated(e.layer)}
-              draw={{ rectangle: false, polygon: false, circle: false, circlemarker: false, marker: false, polyline: false }}
+              edit={{ edit: false, remove: false }}
+              draw={{
+                rectangle: false,
+                polygon: false,
+                circle: false,
+                circlemarker: false,
+                marker: false,
+                polyline: false,
+              }}
             />
           </FeatureGroup>
         </MapContainer>
@@ -371,7 +430,7 @@ export default function App() {
         
         {/* SEARCH BAR CONTAINER */}
         <div className="pointer-events-auto flex flex-col items-center w-full max-w-xl mx-4">
-           <div className="relative w-full shadow-2xl rounded-2xl bg-white/95 backdrop-blur border border-slate-200 transition-all duration-300">
+           <div className="relative w-full shadow-2xl rounded-2xl bg-white/70 backdrop-blur border border-slate-200 transition-all duration-300">
              
              {/* CHECK IF ANY SELECTION EXISTS (Area OR Points) */}
              {(aoi || poiList.length > 0) ? (
@@ -464,55 +523,130 @@ export default function App() {
           <button onClick={() => setShowWelcome(true)} className="bg-white p-3 rounded-[20px] shadow-lg border border-slate-200 hover:bg-slate-50 transition-transform hover:scale-105 active:scale-95">
              <HelpCircle className="w-5 h-5 text-slate-700" />
           </button>
-          <button className="bg-white p-3 rounded-[20px] shadow-lg border border-slate-200 hover:bg-slate-50 transition-transform hover:scale-105 active:scale-95">
-             <User className="w-5 h-5 text-slate-700" />
-          </button>
         </div>
       </div>
 
-      {/* SIDEBAR RESULTS */}
-      <div className={`absolute top-0 left-0 h-full w-80 bg-white/95 backdrop-blur-md shadow-2xl z-40 transform transition-transform duration-300 pt-24 border-r border-slate-200 flex flex-col ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}`}>
+      {/* 4. Sidebar Results - UPDATED WITH EXPANDABLE CARDS */}
+      <div 
+        className={`absolute top-0 left-0 h-full w-80 bg-white/90 backdrop-blur-md shadow-2xl z-40 transform transition-transform duration-300 pt-24 border-r border-slate-200 flex flex-col ${
+          sidebarOpen ? "translate-x-0" : "-translate-x-full"
+        }`}
+      >
         <div className="px-5 pb-4 border-b border-slate-100 flex justify-between items-center">
           <h2 className="font-bold text-lg text-slate-800">Results</h2>
           <span className="text-xs font-medium text-slate-400 bg-slate-100 px-2 py-1 rounded-full">{filteredResults.length} found</span>
         </div>
-        <div className="flex-1 overflow-y-auto p-2 space-y-2">
-           {/* Show captured POIs in Sidebar */}
-           {poiList.length > 0 && (
+<div className="flex-1 overflow-y-auto p-4 space-y-3">
+           
+
+           {/* Asegúrate de tener definido 'poiList' y 'clearPois' en tu componente principal */}
+           {typeof poiList !== 'undefined' && poiList.length > 0 && (
              <div className="mb-4">
-               <div className="flex justify-between items-center px-3 mb-2">
+               <div className="flex justify-between items-center px-1 mb-2">
                  <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Selected Points</h3>
                  <button onClick={clearPois} className="text-[10px] text-red-500 hover:text-red-700 font-bold">Clear All</button>
                </div>
-               {poiList.map(poi => (
-                 <div key={poi.id} className="mx-2 p-2 bg-red-50 border border-red-100 rounded-lg flex justify-between items-center">
-                    <span className="text-xs font-bold text-red-700">poi_{poi.index}</span>
-                    <span className="text-[10px] text-red-600 font-mono">{poi.lat.toFixed(3)}, {poi.lng.toFixed(3)}</span>
-                 </div>
-               ))}
-               <hr className="border-slate-100 my-2 mx-2"/>
+               <div className="space-y-2">
+                 {poiList.map(poi => (
+                   <div key={poi.id} className="p-2 bg-red-50 border border-red-100 rounded-lg flex justify-between items-center">
+                      <span className="text-xs font-bold text-red-700">poi_{poi.index}</span>
+                      <span className="text-[10px] text-red-600 font-mono">{poi.lat.toFixed(3)}, {poi.lng.toFixed(3)}</span>
+                   </div>
+                 ))}
+               </div>
+               <hr className="border-slate-100 my-4 mx-2"/>
              </div>
            )}
 
-           {results.length === 0 && <div className="text-center p-8 text-slate-400 text-sm">Search for a location...</div>}
-           {filteredResults.map((place) => (
-             <div key={place.place_id} onClick={() => setMapPosition([parseFloat(place.lat), parseFloat(place.lon)])} className="p-3 rounded-xl hover:bg-blue-50 cursor-pointer group transition-colors border border-transparent hover:border-blue-100">
-               <h3 className="font-semibold text-slate-800 text-sm group-hover:text-blue-600 mb-1">{place.name || place.display_name.split(',')[0]}</h3>
-               <p className="text-xs text-slate-500 line-clamp-2 mb-2">{place.display_name}</p>
-               <div className="flex items-center gap-2">
-                 <div className="flex text-yellow-400">
-                   {[...Array(place.confidenceScore)].map((_, i) => (
-                     <svg key={i} className="w-3 h-3 fill-current" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" /></svg>
-                   ))}
-                 </div>
-               </div>
+
+           {results.length === 0 && (
+             <div className="text-center p-8 text-slate-400 text-sm">
+               Search for a location to see results...
              </div>
-           ))}
+           )}
+
+           {filteredResults.map((place) => {
+             const isExpanded = expandedId === place.place_id;
+
+             return (
+               <div 
+                 key={place.place_id}
+                 className={`rounded-2xl transition-all duration-300 border cursor-pointer overflow-hidden ${
+                   isExpanded 
+                     ? "bg-white border-blue-200 shadow-md ring-1 ring-blue-100" 
+                     : "bg-white/50 border-transparent hover:bg-white hover:shadow-sm"
+                 }`}
+                 onClick={() => {
+                   setMapPosition([parseFloat(place.lat), parseFloat(place.lon)]);
+                   setExpandedId(isExpanded ? null : place.place_id);
+                 }}
+               >
+                 {/* Card Header (Always Visible) */}
+                 <div className="p-4">
+                   <div className="flex justify-between items-start gap-2">
+                     <h3 className={`font-bold text-sm leading-tight ${isExpanded ? 'text-blue-700' : 'text-slate-800'}`}>
+                       {place.name || place.display_name.split(',')[0]}
+                     </h3>
+                     <div className="flex items-center gap-1 bg-slate-100 px-1.5 py-0.5 rounded text-[10px] font-bold text-slate-600 shrink-0">
+                       <span className="text-yellow-500">★</span> {place.score}.0
+                     </div>
+                   </div>
+                   
+                   {!isExpanded && (
+                     <p className="text-xs text-slate-500 line-clamp-2 mt-1">
+                       {place.reason}
+                     </p>
+                   )}
+                 </div>
+
+                 {/* Expandable Details */}
+                 {isExpanded && (
+                   <div className="px-4 pb-4 animate-in slide-in-from-top-2 duration-300">
+                     
+                     <div className="mb-3 p-2 bg-slate-50 rounded-lg text-xs text-slate-600 italic border border-slate-100">
+                       "{place.reason}"
+                     </div>
+
+                     <div className="mb-3">
+                       <h4 className="text-[10px] uppercase font-bold text-slate-400 mb-1.5 tracking-wider">Capabilities</h4>
+                       <div className="flex flex-wrap gap-1.5">
+                         {place.capabilities?.map((cap, i) => (
+                           <span key={i} className="inline-flex items-center px-2 py-1 rounded-md text-[10px] font-medium bg-blue-50 text-blue-700 border border-blue-100">
+                             {formatCapability(cap)}
+                           </span>
+                         ))}
+                       </div>
+                     </div>
+
+                     <div className="flex gap-2 mt-2 pt-2 border-t border-slate-100">
+                        {place.officialWebsite && (
+                          <a 
+                            href={place.officialWebsite} 
+                            target="_blank" 
+                            rel="noreferrer"
+                            onClick={(e) => e.stopPropagation()} 
+                            className="flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                            Visit Website
+                          </a>
+                        )}
+                        <button className="px-3 py-2 text-xs font-semibold text-slate-600 bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors flex items-center gap-1">
+                          <Navigation className="w-3 h-3" />
+                          Directions
+                        </button>
+                     </div>
+                   </div>
+                 )}
+               </div>
+             );
+           })}
         </div>
-      </div>
+
 
       {/* RIGHT PANEL (Filters) */}
       <div className={`absolute top-40 right-4 w-64 bg-white/60 backdrop-blur-md rounded-2xl shadow-xl border border-slate-200 z-40 p-5 transition-all duration-300 origin-top-right ${rightPanelOpen ? 'opacity-100 scale-100' : 'opacity-0 scale-95 pointer-events-none'}`}>
+         {/* ... (Todo igual que antes) ... */}
          <div className="flex justify-between items-center mb-4">
            <h3 className="font-bold text-sm text-slate-800 flex items-center gap-2"><Settings className="w-4 h-4" /> Map Controls</h3>
            <button onClick={() => setRightPanelOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>

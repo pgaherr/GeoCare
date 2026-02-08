@@ -15,11 +15,12 @@ from typing import Callable, Tuple, Optional
 import numpy as np
 import pandas as pd
 import geopandas as gpd
+import os 
 
 import quality_utils
 import isochrones
 import h3_utils
-
+import population
 
 # Number of discrete accessibility grades (0–1)
 n_accessibility_grades: int = 10
@@ -192,6 +193,25 @@ def get_quality_matrix(
 
     return quality_matrix
 
+def get_pop_h3(aoi,results_path,h3_pop_resolution = 8):
+    pop_h3_path = results_path+f"/population_h3_res_{h3_pop_resolution}.csv"
+    if os.path.isfile(pop_h3_path):
+        pop_h3_df = pd.read_csv(pop_h3_path)
+    else:
+        population_file = population.download_worldpop_population(
+            aoi,
+            2025,
+            folder=results_path,
+            resolution="1km",
+        )
+        pop_h3_df = h3_utils.from_raster(population_file,aoi=aoi,resolution=h3_pop_resolution,method="distribute")
+        pop_h3_df = pop_h3_df.rename(columns={'value':'population'})
+        pop_h3_df.reset_index().to_csv(pop_h3_path)
+
+    pop_h3_df = pd.read_csv(pop_h3_path).set_index("h3_cell")
+    return pop_h3_df 
+
+
 def coverage(
     data,
     elasticity: float, 
@@ -237,6 +257,9 @@ def coverage(
         iso_df_h3_pop = pop_h3.merge(
             iso_df_h3, left_index=True, right_index=True, how="left"
         )
+        iso_df_h3_pop = iso_df_h3_pop[iso_df_h3_pop['population'] > 1]
+        iso_df_h3_pop = h3_utils.to_gdf(iso_df_h3_pop)
+        iso_df_h3_pop.geometry = iso_df_h3_pop.geometry.centroid
 
     if do_h3 and do_population:
         return iso_df, iso_df_h3, iso_df_h3_pop

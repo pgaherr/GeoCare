@@ -39,7 +39,7 @@ L.Icon.Default.mergeOptions({
 // 1. Star Rating Filter (Bottom Center)
 const ConfidenceFilter = ({ value, onChange }) => {
   return (
-    <div className="bg-white/90 backdrop-blur-md border border-slate-200 shadow-xl rounded-full px-6 py-3 flex items-center gap-4 animate-in slide-in-from-bottom-10 duration-500">
+    <div className="bg-white/90 backdrop-blur-md border border-slate-200 shadow-xl rounded-[20px] px-6 py-3 flex items-center gap-4 animate-in slide-in-from-bottom-10 duration-500">
       <span className="text-xs font-bold uppercase tracking-wider text-slate-500 hidden sm:block">
         Confidence Threshold
       </span>
@@ -101,7 +101,7 @@ export default function UrbanLayoutApp() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState([]);
   const [minConfidence, setMinConfidence] = useState(1); // 1 = Show All
-  const [mapPosition, setMapPosition] = useState([40.4168, -3.7038]); // Madrid
+  const [mapPosition, setMapPosition] = useState([7.983173013737491, -1.0916666895576415]); // Ghana
 
   // Mock Filter States (Right Panel)
   const [timeRange, setTimeRange] = useState(50);
@@ -146,14 +146,14 @@ export default function UrbanLayoutApp() {
       <div className="absolute inset-0 z-0">
         <MapContainer
           center={mapPosition}
-          zoom={13}
+          zoom={1}
           style={{ height: "100%", width: "100%" }}
           zoomControl={false}
         >
-          {/* Tile Layer (Clean/Light for contrast) */}
+          {/* Tile Layer */}
           <TileLayer
             attribution='&copy; OSM'
-            url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
+            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
           
           <RecenterMap lat={mapPosition[0]} lon={mapPosition[1]} />
@@ -203,10 +203,15 @@ export default function UrbanLayoutApp() {
         <div className="pointer-events-auto flex items-center gap-3">
           <button 
             onClick={() => setSidebarOpen(!sidebarOpen)}
-            className="bg-white p-3 rounded-full shadow-lg border border-slate-200 hover:bg-slate-50 transition-transform hover:scale-105 active:scale-95"
+            className="bg-white p-3 rounded-[20px] shadow-lg border border-slate-200 hover:bg-slate-50 transition-transform hover:scale-105 active:scale-95"
           >
             {sidebarOpen ? <ChevronLeft className="w-5 h-5"/> : <Menu className="w-5 h-5"/>}
           </button>
+
+          <div className="flex items-center gap-2">
+            <img src="/favicon.png" alt="Logo" className="h-6 w-auto" />
+            <span className="font-bold text-slate-800 tracking-tight">GeoCare</span>
+          </div>
         </div>
 
         {/* Center: Search Command Bar */}
@@ -215,7 +220,7 @@ export default function UrbanLayoutApp() {
              <form onSubmit={handleSearch} className="relative">
                <input 
                  type="text" 
-                 placeholder="Search places (e.g. 'Parks in London')..." 
+                 placeholder="Search for healthcare nearby locations..." 
                  className="w-full pl-5 pr-12 py-3.5 bg-white/95 backdrop-blur rounded-2xl border-0 shadow-sm focus:ring-2 focus:ring-blue-500 outline-none text-slate-800 placeholder:text-slate-400"
                  value={query}
                  onChange={(e) => setQuery(e.target.value)}
@@ -239,7 +244,7 @@ export default function UrbanLayoutApp() {
 
         {/* Right: User Profile */}
         <div className="pointer-events-auto">
-          <button className="bg-white p-3 rounded-full shadow-lg border border-slate-200 hover:bg-slate-50">
+          <button className="bg-white p-3 rounded-[20px] shadow-lg border border-slate-200 hover:bg-slate-50 transition-transform hover:scale-105 active:scale-95">
              <User className="w-5 h-5 text-slate-700" />
           </button>
         </div>
@@ -301,7 +306,7 @@ export default function UrbanLayoutApp() {
           5. RIGHT-SIDE OVERLAY (Map Filters)
           Z-Index: 40
       ========================================= */}
-      <div className={`absolute top-24 right-4 w-64 bg-white/90 backdrop-blur-md rounded-2xl shadow-xl border border-slate-200 z-40 p-5 transition-all duration-300 origin-top-right ${rightPanelOpen ? 'opacity-100 scale-100' : 'opacity-0 scale-95 pointer-events-none'}`}>
+      <div className={`absolute top-40 right-4 w-64 bg-white/90 backdrop-blur-md rounded-2xl shadow-xl border border-slate-200 z-40 p-5 transition-all duration-300 origin-top-right ${rightPanelOpen ? 'opacity-100 scale-100' : 'opacity-0 scale-95 pointer-events-none'}`}>
          <div className="flex justify-between items-center mb-4">
            <h3 className="font-bold text-sm text-slate-800 flex items-center gap-2">
              <Settings className="w-4 h-4" /> Map Controls
@@ -378,7 +383,7 @@ export default function UrbanLayoutApp() {
           7. LAYERS CONTROL (Bottom Right)
           Z-Index: 50
       ========================================= */}
-      <div className="absolute bottom-8 right-4 z-50 flex flex-col gap-3">
+      <div className={`absolute bottom-8 right-4 z-50 flex flex-col transition-all duration-300 ${showLayers ? 'gap-12' : 'gap-3'}`}>
          {/* Toggle for the Right Panel (if closed) */}
          {!rightPanelOpen && (
            <button 

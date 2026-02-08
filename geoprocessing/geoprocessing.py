@@ -192,48 +192,20 @@ def get_quality_matrix(
 
     return quality_matrix
 
-
-def coverage_quality(
-    data: gpd.GeoDataFrame,
-    service_quality_func: Callable[[float], float],
-    quality_func: Callable[[float, float], float],
-    reference_distance: float,
+def coverage(
+    data,
+    elasticity: float, 
+    reference_distance: float, 
     max_distance: float,
-    do_population: bool = True,
-    do_h3: bool = True,
-    h3_resolution: int = 8,
-    pop_h3: Optional[pd.DataFrame] = None,
+    pop_h3 = None,
+    h3_resolution = None
 ):
-    """
-    Compute spatial accessibility and optional H3 / population aggregation.
-
-    Parameters
-    ----------
-    data : GeoDataFrame
-        Input services with geometry and 'stars'
-    service_quality_func : Callable
-        Maps stars → service quality
-    quality_func : Callable
-        Combined quality function
-    reference_distance : float
-    max_distance : float
-    do_population : bool
-        Whether to aggregate with population
-    do_h3 : bool
-        Whether to aggregate to H3
-    h3_resolution : int
-        H3 resolution
-    pop_h3 : pd.DataFrame, optional
-        Population indexed by H3 cell
-
-    Returns
-    -------
-    tuple
-        Depending on flags, returns iso_df, iso_df_h3, iso_df_h3_pop
-    """
+    service_quality_func = get_service_quality_func()
+    distance_quality_func = get_distance_quality_func(elasticity,reference_distance,max_distance)
+    quality_func = get_quality_func(service_quality_func,distance_quality_func)
+    
     data = data.copy()
     data["service_quality"] = data["stars"].map(service_quality_func).round(3)
-
     _, distance_grid = get_grids(quality_func, reference_distance, max_distance)
     quality_matrix = get_quality_matrix(data, quality_func, distance_grid)
 
@@ -243,6 +215,14 @@ def coverage_quality(
 
     iso_df_h3 = None
     iso_df_h3_pop = None
+
+    do_h3 = True 
+    if h3_resolution is None:
+        do_h3 = False 
+
+    do_population = True 
+    if pop_h3 is None:
+        do_population = False 
 
     if do_h3:
         iso_df_h3 = h3_utils.from_gdf(

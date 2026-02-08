@@ -16,7 +16,6 @@ import {
   Menu, 
   X, 
   Layers, 
-  Filter, 
   MapPin,
   Settings,
   HelpCircle,
@@ -218,6 +217,8 @@ export default function UrbanLayoutApp() {
 
   // Population overlay toggle (independent of coverage mode)
   const [showPopulation, setShowPopulation] = useState(false);
+  // Population rendering mode: 'hex' (existing choropleth) | 'balls' (general_map-like circles)
+  const [populationView, setPopulationView] = useState('hex');
 
   // Recompute loading state
   const [isRecomputing, setIsRecomputing] = useState(false);
@@ -305,6 +306,82 @@ export default function UrbanLayoutApp() {
       opacity: 0.4,
     };
   };
+
+  // Build population "balls" using the same scaling pattern as general_map:
+  // radius = max_radius * clip(population, 0, p90) / p90
+  const populationBallMarkers = useMemo(() => {
+    const features = h3PopulationLayer?.features;
+    if (!features?.length) return [];
+
+    const getFeatureCenter = (geometry) => {
+      if (!geometry) return null;
+      if (geometry.type === 'Point') {
+        const [lon, lat] = geometry.coordinates || [];
+        return Number.isFinite(lat) && Number.isFinite(lon) ? [lat, lon] : null;
+      }
+
+      let minLon = Infinity;
+      let minLat = Infinity;
+      let maxLon = -Infinity;
+      let maxLat = -Infinity;
+
+      const visit = (coords) => {
+        if (!Array.isArray(coords)) return;
+        if (coords.length === 2 && typeof coords[0] === "number" && typeof coords[1] === "number") {
+          const [lon, lat] = coords;
+          if (!Number.isFinite(lon) || !Number.isFinite(lat)) return;
+          minLon = Math.min(minLon, lon);
+          maxLon = Math.max(maxLon, lon);
+          minLat = Math.min(minLat, lat);
+          maxLat = Math.max(maxLat, lat);
+          return;
+        }
+        for (const child of coords) visit(child);
+      };
+
+      visit(geometry.coordinates);
+      if (!Number.isFinite(minLon) || !Number.isFinite(minLat) || !Number.isFinite(maxLon) || !Number.isFinite(maxLat)) {
+        return null;
+      }
+      return [(minLat + maxLat) / 2, (minLon + maxLon) / 2];
+    };
+
+    const quantile = (values, q) => {
+      if (!values.length) return 0;
+      const sorted = [...values].sort((a, b) => a - b);
+      const pos = (sorted.length - 1) * q;
+      const base = Math.floor(pos);
+      const rest = pos - base;
+      const upper = sorted[base + 1];
+      return upper !== undefined
+        ? sorted[base] + rest * (upper - sorted[base])
+        : sorted[base];
+    };
+
+    const populations = features
+      .map((feature) => Number(feature.properties?.population) || 0)
+      .filter((value) => value > 0);
+    const p90 = quantile(populations, 0.9);
+    const maxRadius = 12; // matches general_map default max_radius
+
+    return features
+      .map((feature, idx) => {
+        const center = getFeatureCenter(feature.geometry);
+        if (!center) return null;
+
+        const pop = Number(feature.properties?.population) || 0;
+        const clipped = p90 > 0 ? Math.min(Math.max(pop, 0), p90) : pop;
+        const radius = p90 > 0 ? (maxRadius * clipped) / p90 : maxRadius;
+        return {
+          id: feature.properties?.h3_cell || `cell-${idx}`,
+          center,
+          pop,
+          radius: Math.max(radius, 1.5),
+          fillColor: '#111111',
+        };
+      })
+      .filter(Boolean);
+  }, [h3PopulationLayer]);
 
   // Search Logic - calls FastAPI pipeline (ranking + coverage)
   const handleSearch = async (e) => {
@@ -480,14 +557,35 @@ export default function UrbanLayoutApp() {
               style={getIsochroneStyle}
             />
           )}
-          {/* Population Overlay */}
-          {showPopulation && h3PopulationLayer && (
+          {/* Population Overlay (hex mode) */}
+          {showPopulation && populationView === 'hex' && h3PopulationLayer && (
             <GeoJSON
               key={`population-${Date.now()}`}
               data={h3PopulationLayer}
               style={getPopulationStyle}
             />
           )}
+          {/* Population Overlay (ball mode) */}
+          {showPopulation && populationView === 'balls' && populationBallMarkers.map((marker) => (
+            <CircleMarker
+              key={`population-ball-${marker.id}`}
+              center={marker.center}
+              radius={marker.radius}
+              pathOptions={{
+                fillColor: marker.fillColor,
+                fillOpacity: 0.8,
+                color: 'transparent',
+                weight: 0,
+                opacity: 1.0,
+              }}
+            >
+              <Popup>
+                <div className="p-1 text-sm">
+                  <strong>Population</strong>: {Math.round(marker.pop).toLocaleString()}
+                </div>
+              </Popup>
+            </CircleMarker>
+          ))}
 
           {/* Facility Markers from GeoJSON */}
           {facilitiesLayer && facilitiesLayer.features?.map((feature, idx) => {
@@ -596,12 +694,6 @@ export default function UrbanLayoutApp() {
            
            {/* Quick Options Under Search */}
            <div className="flex gap-2 mt-3 animate-in fade-in slide-in-from-top-2">
-             <button className="flex items-center gap-1.5 px-3 py-1.5 bg-white/90 backdrop-blur rounded-full text-xs font-semibold text-slate-600 shadow-sm border border-slate-200 hover:bg-slate-50">
-               <Filter className="w-3 h-3" /> Filters
-             </button>
-             <button className="flex items-center gap-1.5 px-3 py-1.5 bg-white/90 backdrop-blur rounded-full text-xs font-semibold text-slate-600 shadow-sm border border-slate-200 hover:bg-slate-50">
-               <MapPin className="w-3 h-3" /> Area Selection
-             </button>
              {/* Coverage Mode Toggle (Buffers ↔ H3) */}
              <button
                onClick={() => setCoverageMode(coverageMode === 'buffers' ? 'h3' : 'buffers')}
@@ -625,6 +717,17 @@ export default function UrbanLayoutApp() {
              >
                <Users className="w-3 h-3" />
                Population
+             </button>
+             <button
+               onClick={() => setPopulationView((prev) => (prev === 'hex' ? 'balls' : 'hex'))}
+               className={`flex items-center gap-1.5 px-3 py-1.5 backdrop-blur rounded-full text-xs font-semibold shadow-sm border transition-colors ${
+                 populationView === 'balls'
+                   ? 'bg-indigo-500 text-white border-indigo-600'
+                   : 'bg-white/90 text-slate-600 border-slate-200 hover:bg-slate-50'
+               }`}
+               title="Switch population view mode"
+             >
+               {populationView === 'hex' ? 'Pop: Hex' : 'Pop: Balls'}
              </button>
            </div>
         </div>

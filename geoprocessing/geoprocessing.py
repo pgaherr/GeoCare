@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 import geopandas as gpd
 import os 
+import shapely
 
 import quality_utils
 import isochrones
@@ -269,3 +270,26 @@ def coverage(
         return iso_df, iso_df_h3_pop
 
     return iso_df
+
+
+def poi_distance_quality(
+    data,
+    poi,  
+    elasticity: float, 
+    reference_distance: float, 
+    max_distance: float
+):
+    utm_crs = poi.estimate_utm_crs()
+    poi = poi.to_crs(utm_crs)
+    data = data.to_crs(utm_crs)
+    data = data[shapely.buffer(poi.union_all(),max_distance)]
+    data["distance_to_poi"] = data.geometry.map(
+        lambda geom: poi.distance(geom).min()
+    )
+    distance_quality_func = get_distance_quality_func(
+        elasticity,
+        reference_distance,
+        max_distance,
+    )
+    data["distance_quality"] = data["distance_to_poi"].map(distance_quality_func)
+    return data.to_crs(4326) 

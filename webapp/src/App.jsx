@@ -7,7 +7,8 @@ import {
   useMap, 
   FeatureGroup,
   ZoomControl,
-  AttributionControl 
+  AttributionControl,
+  useMapEvents 
 } from "react-leaflet";
 import { EditControl } from "react-leaflet-draw";
 import L from "leaflet";
@@ -31,7 +32,8 @@ import {
   Star,
   HelpCircle,
   ExternalLink,
-  Navigation
+  Navigation,
+  Trash2
 } from "lucide-react";
 import "leaflet/dist/leaflet.css";
 import "leaflet-draw/dist/leaflet.draw.css";
@@ -196,6 +198,28 @@ const MapDrawHandler = ({ isDrawing, onDrawReady, onDrawCreated }) => {
   return null;
 };
 
+
+const redIcon = new L.Icon({
+  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+  popupAnchor: [1, -34],
+  shadowSize: [41, 41]
+});
+
+
+const PointCaptureHandler = ({ isActive, onPointCaptured }) => {
+  useMapEvents({
+    click(e) {
+      if (isActive) {
+        onPointCaptured(e.latlng);
+      }
+    }
+  });
+  return null;
+};
+
 // --- MAIN APP ---
 
 export default function App() {
@@ -224,6 +248,9 @@ export default function App() {
   // Mock Settings
   const [timeRange, setTimeRange] = useState(50);
   const [popularity, setPopularity] = useState(true);
+
+  const [isPointMode, setIsPointMode] = useState(false);
+  const [poiList, setPoiList] = useState([]);
 
   // Helper function to format capability strings
   const formatCapability = (text) => {
@@ -264,6 +291,28 @@ export default function App() {
     } catch (error) {
       console.error("Search error:", error);
     }
+  };
+ 
+  const handlePointSelectionClick = () => {
+    setIsPointMode(!isPointMode);
+    setIsDrawingMode(false); // Desactiva el modo dibujo si estaba activo
+    setSidebarOpen(false);
+  };
+
+  const handlePointCaptured = (latlng) => {
+    const newIndex = poiList.length + 1; 
+    const newPoint = {
+      id: `poi_${newIndex}`, 
+      index: newIndex,
+      lat: latlng.lat,
+      lng: latlng.lng
+    };
+    setPoiList(prev => [...prev, newPoint]);
+  };
+
+  const clearPois = () => {
+    setPoiList([]);        
+    setIsPointMode(false); 
   };
 
   const handleAreaSelectionClick = () => {
@@ -323,6 +372,7 @@ export default function App() {
           style={{ height: "100%", width: "100%" }}
           zoomControl={false}
           attributionControl={false}
+          
         >
           <TileLayer
             attribution={
@@ -379,6 +429,27 @@ export default function App() {
               }}
             />
           </FeatureGroup>
+
+          <PointCaptureHandler 
+            isActive={isPointMode} 
+            onPointCaptured={handlePointCaptured} 
+          />
+
+          {poiList.map((poi) => (
+             <Marker 
+               key={poi.id} 
+               position={[poi.lat, poi.lng]} 
+               icon={redIcon}
+             >
+                <Popup>
+                  <div className="text-center">
+                    <strong className="text-red-600">poi_{poi.index}</strong>
+                    <br/>
+                    <span className="text-xs text-slate-500">{poi.lat.toFixed(4)}, {poi.lng.toFixed(4)}</span>
+                  </div>
+                </Popup>
+             </Marker>
+          ))}
         </MapContainer>
       </div>
 
@@ -442,9 +513,25 @@ export default function App() {
            </div>
            
            <div className="flex gap-2 mt-3 animate-in fade-in slide-in-from-top-2">
-             <button className="flex items-center gap-1.5 px-3 py-1.5 bg-white/90 backdrop-blur rounded-full text-xs font-semibold text-slate-600 shadow-sm border border-slate-200 hover:bg-slate-50">
-               <Filter className="w-3 h-3" /> Filters
+             {/* Botón ACTIVAR PUNTOS */}
+             <button 
+               onClick={handlePointSelectionClick}
+               className={`flex items-center gap-1.5 px-3 py-1.5 backdrop-blur rounded-full text-xs font-semibold shadow-sm border transition-all ${
+                 isPointMode
+                   ? "bg-red-600 text-white border-red-600 ring-2 ring-red-300" 
+                   : "bg-white/90 text-slate-600 border-slate-200 hover:bg-slate-50"
+               }`}
+             >
+               {isPointMode ? <CheckCircle className="w-3 h-3" /> : <MapPin className="w-3 h-3" />}
+               Points {poiList.length > 0 && `(${poiList.length})`}
              </button>
+
+             {/* Botón BORRAR PUNTOS (solo sale si hay puntos) */}
+             {poiList.length > 0 && (
+                <button onClick={clearPois} className="flex items-center gap-1.5 px-2 py-1.5 bg-red-50 backdrop-blur rounded-full text-xs font-semibold text-red-600 shadow-sm border border-red-100 hover:bg-red-100">
+                  <Trash2 className="w-3 h-3" />
+                </button>
+             )}
              <button 
                onClick={handleAreaSelectionClick}
                className={`flex items-center gap-1.5 px-3 py-1.5 backdrop-blur rounded-full text-xs font-semibold shadow-sm border transition-all ${

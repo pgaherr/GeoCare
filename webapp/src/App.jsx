@@ -201,6 +201,10 @@ export default function UrbanLayoutApp() {
   // Coverage Layers (from pipeline)
   const [facilitiesLayer, setFacilitiesLayer] = useState(null);
   const [isochronesLayer, setIsochronesLayer] = useState(null);
+  const [h3AccessibilityLayer, setH3AccessibilityLayer] = useState(null);
+  
+  // Coverage display mode: 'buffers' or 'h3'
+  const [coverageMode, setCoverageMode] = useState('buffers');
 
   // Isochrone style function - color by accessibility
   const getIsochroneStyle = (feature) => {
@@ -208,11 +212,11 @@ export default function UrbanLayoutApp() {
     // Color scale: red (low) → yellow → green (high)
     const hue = accessibility * 120; // 0=red, 60=yellow, 120=green
     return {
-      fillColor: `hsl(${hue}, 70%, 50%)`,
-      fillOpacity: 0.4,
-      weight: 1,
-      color: `hsl(${hue}, 70%, 40%)`,
-      opacity: 0.8,
+      fillColor: `hsl(${hue}, 80%, 45%)`,
+      fillOpacity: 0.6,  // Increased from 0.4
+      weight: 2,         // Thicker border
+      color: `hsl(${hue}, 80%, 30%)`,
+      opacity: 1.0,
     };
   };
 
@@ -245,10 +249,16 @@ export default function UrbanLayoutApp() {
       
       // Set GeoJSON layers for map
       if (data.layers?.facilities) {
+        console.log("Setting facilities layer:", data.layers.facilities.features?.length, "features");
         setFacilitiesLayer(data.layers.facilities);
       }
       if (data.layers?.isochrones) {
+        console.log("Setting isochrones layer:", data.layers.isochrones.features?.length, "features");
         setIsochronesLayer(data.layers.isochrones);
+      }
+      if (data.layers?.h3_accessibility) {
+        console.log("Setting H3 accessibility layer:", data.layers.h3_accessibility.features?.length, "features");
+        setH3AccessibilityLayer(data.layers.h3_accessibility);
       }
       
       // Map facilities to sidebar format
@@ -309,11 +319,18 @@ export default function UrbanLayoutApp() {
           
           <RecenterMap lat={mapPosition[0]} lon={mapPosition[1]} />
 
-          {/* Isochrone Coverage Layer */}
-          {isochronesLayer && (
+          {/* Coverage Layer - Either Buffers or H3 Hexagons */}
+          {coverageMode === 'buffers' && isochronesLayer && (
             <GeoJSON
               key={`isochrones-${Date.now()}`}
               data={isochronesLayer}
+              style={getIsochroneStyle}
+            />
+          )}
+          {coverageMode === 'h3' && h3AccessibilityLayer && (
+            <GeoJSON
+              key={`h3-${Date.now()}`}
+              data={h3AccessibilityLayer}
               style={getIsochroneStyle}
             />
           )}
@@ -430,6 +447,18 @@ export default function UrbanLayoutApp() {
              </button>
              <button className="flex items-center gap-1.5 px-3 py-1.5 bg-white/90 backdrop-blur rounded-full text-xs font-semibold text-slate-600 shadow-sm border border-slate-200 hover:bg-slate-50">
                <MapPin className="w-3 h-3" /> Area Selection
+             </button>
+             {/* Coverage Mode Toggle */}
+             <button 
+               onClick={() => setCoverageMode(coverageMode === 'buffers' ? 'h3' : 'buffers')}
+               className={`flex items-center gap-1.5 px-3 py-1.5 backdrop-blur rounded-full text-xs font-semibold shadow-sm border transition-colors ${
+                 coverageMode === 'h3' 
+                   ? 'bg-blue-500 text-white border-blue-600' 
+                   : 'bg-white/90 text-slate-600 border-slate-200 hover:bg-slate-50'
+               }`}
+             >
+               <Layers className="w-3 h-3" /> 
+               {coverageMode === 'buffers' ? 'Buffers' : 'H3 Hexagons'}
              </button>
            </div>
         </div>

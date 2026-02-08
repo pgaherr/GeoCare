@@ -20,15 +20,25 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "geoprocessing"))
 from ranking_agent import rank_facilities, rank_facilities_gdf
 
 # Import geoprocessing (only when needed to avoid startup delays)
-def run_coverage_pipeline(query: str):
-    """Run the full geoprocessing pipeline and return GeoJSON data."""
+def run_coverage_pipeline(query: str, include_h3_pop: bool = True):
+    """
+    Run the full geoprocessing pipeline and return all GeoJSON layers.
+    
+    Returns dict with:
+        - aoi: Ghana boundary (GeoDataFrame)
+        - facilities: Ranked facilities with geometry (GeoDataFrame)
+        - isochrones: Buffer polygons with accessibility bands (GeoDataFrame)
+        - h3_accessibility: H3 cells with accessibility values (DataFrame)
+        - h3_population: H3 cells with population and accessibility (GeoDataFrame)
+        - config: Pipeline configuration for frontend
+    """
     import geoprocessing
     import geopandas as gpd
     
     RESULTS_PATH = Path(__file__).parent.parent.parent / "geoprocessing" / "results"
-    H3_RESOLUTION = 7
+    H3_RESOLUTION = 5
     REFERENCE_DISTANCE = 1000
-    MAX_DISTANCE = 50000
+    MAX_DISTANCE = 80000
     ELASTICITY = 0.5
     
     # Get AOI (Ghana boundary, cached)
@@ -43,17 +53,19 @@ def run_coverage_pipeline(query: str):
     # Get facilities via ranking agent
     facilities_gdf = rank_facilities_gdf(query)
     if facilities_gdf.empty:
-        return None, None, None
+        return None
     
     facilities_gdf = facilities_gdf[facilities_gdf["geometry"].notna()]
     if facilities_gdf.empty:
-        return None, None, None
+        return None
     
     # Get population data (cached)
-    pop_h3 = geoprocessing.get_pop_h3(aoi, str(RESULTS_PATH), h3_pop_resolution=H3_RESOLUTION)
+    pop_h3 = None
+    if include_h3_pop:
+        pop_h3 = geoprocessing.get_pop_h3(aoi, str(RESULTS_PATH), h3_pop_resolution=H3_RESOLUTION)
     
-    # Run coverage analysis
-    iso_df, iso_df_h3, iso_df_h3_pop = geoprocessing.coverage(
+    # Run coverage analysis - get all outputs
+    result = geoprocessing.coverage(
         facilities_gdf,
         elasticity=ELASTICITY,
         reference_distance=REFERENCE_DISTANCE,
@@ -62,7 +74,26 @@ def run_coverage_pipeline(query: str):
         h3_resolution=H3_RESOLUTION,
     )
     
-    return facilities_gdf, iso_df, iso_df_h3_pop
+    # Unpack based on what was returned
+    if include_h3_pop:
+        iso_df, iso_df_h3, iso_df_h3_pop = result
+    else:
+        iso_df, iso_df_h3 = result
+        iso_df_h3_pop = None
+    
+    return {
+        "aoi": aoi,
+        "facilities": facilities_gdf,
+        "isochrones": iso_df,  # Buffer polygons with accessibility bands
+        "h3_accessibility": iso_df_h3,  # H3 cells with accessibility
+        "h3_population": iso_df_h3_pop,  # H3 cells with population
+        "config": {
+            "h3_resolution": H3_RESOLUTION,
+            "reference_distance": REFERENCE_DISTANCE,
+            "max_distance": MAX_DISTANCE,
+            "elasticity": ELASTICITY,
+        }
+    }
 
 app = FastAPI(
     title="GeoCare Facility API",
@@ -146,34 +177,63 @@ async def search_with_coverage(request: SearchRequest):
     """
     Full pipeline: search → ranking → coverage analysis.
     
-    Returns JSON with GeoJSON for facilities, isochrones, and H3 population.
+    Returns JSON with GeoJSON for all layers (like general_map):
+    - aoi: Ghana boundary outline
+    - facilities: POIs with stars rating
+    - isochrones: Buffer polygons with accessibility bands
+    - h3_accessibility: H3 cells with accessibility values
+    - h3_population: H3 cells with population (centroids)
+    - config: Pipeline configuration
+    
     This endpoint may take 10-30 seconds on first run (downloads population data).
     """
     if not request.query.strip():
         raise HTTPException(status_code=400, detail="Query cannot be empty")
     
     try:
-        facilities_gdf, iso_df, h3_pop_gdf = run_coverage_pipeline(request.query)
+        result = run_coverage_pipeline(request.query)
         
-        if facilities_gdf is None:
+        if result is None:
             return {
                 "query": request.query,
                 "facilities_count": 0,
                 "error": "No facilities found",
-                "layers": {}
+                "layers": {},
+                "config": {}
             }
         
-        # Convert to GeoJSON strings
+        # Helper to ensure CRS is WGS84 for Leaflet
+        def to_geojson_wgs84(gdf):
+            if gdf.crs is None:
+                gdf = gdf.set_crs("EPSG:4326")
+            elif gdf.crs.to_epsg() != 4326:
+                gdf = gdf.to_crs("EPSG:4326")
+            return json.loads(gdf.to_json())
+        
+        # Build response with all layers as GeoJSON (all in WGS84)
+        layers = {
+            "aoi": to_geojson_wgs84(result["aoi"]),
+            "facilities": to_geojson_wgs84(result["facilities"]),
+            "isochrones": to_geojson_wgs84(result["isochrones"]),
+        }
+        
+        # H3 accessibility (convert to GeoDataFrame if needed)
+        if result["h3_accessibility"] is not None:
+            import h3_utils
+            h3_gdf = h3_utils.to_gdf(result["h3_accessibility"])
+            layers["h3_accessibility"] = to_geojson_wgs84(h3_gdf)
+        
+        # H3 population
+        if result["h3_population"] is not None:
+            layers["h3_population"] = to_geojson_wgs84(result["h3_population"])
+        
         return {
             "query": request.query,
-            "facilities_count": len(facilities_gdf),
-            "isochrone_bands": len(iso_df),
-            "h3_cells": len(h3_pop_gdf),
-            "layers": {
-                "facilities": json.loads(facilities_gdf.to_json()),
-                "isochrones": json.loads(iso_df.to_json()),
-                "h3_population": json.loads(h3_pop_gdf.to_json()),
-            }
+            "facilities_count": len(result["facilities"]),
+            "isochrone_bands": len(result["isochrones"]),
+            "h3_cells": len(result["h3_accessibility"]) if result["h3_accessibility"] is not None else 0,
+            "layers": layers,
+            "config": result["config"],
         }
     except Exception as e:
         import traceback

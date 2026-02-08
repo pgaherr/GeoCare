@@ -7,21 +7,23 @@
 
   /* METADATA */
   --presentation-title: "Presentation template";
-  --presentation-subtitle: "A very cool subtitile";
-  --presentation-title-short: "Template";
-  --presenter-name-full: "Someone's name, insitution or possition";
-  --presenter-name: "Someone's name";
+  --presentation-subtitle: "Mapping the path to health";
+  --presentation-title-short: "Mapping the path to health";
+  --presenter-name-full: "Alejandro Astudillo Aguiar\A Ainhoa Alba de Jesús\A Miguel Ureña Pliego\A Patricia García Herreros";
+  --presenter-name: "Alejandro Astudillo Aguiar\A Ainhoa Alba de Jesús\A Miguel Ureña Pliego\A Patricia García Herreros";
   --font-spec: "Helvetica Regular 18/18";
 
   /* LOGOS — DARK */
-  --l-inst-main-d: url("logos/ML_logo_dark.png");
-  --l-inst-icon-d: url("logos/ML_symbol_dark.png");
-  --l-dept-main-d: url("logos/CS_logo_dark.png");
-  --l-dept-icon-d: url("logos/CS_symbol_dark.png");
+  --l-inst-main-d: url("logos/databricks-x-hack-nation-logo.png");
+  --l-inst-icon-d: url("logos/hack-nation-logo.png");
+  --l-dept-main-d: url("logos/geo-care-symbol.png");
+  --l-dept-icon-d: url("logos/geo-care-logo.png");
+  --l-extra-icon-d: url("logos/databricks-logo.png");
 
   /* LOGOS — LIGHT */
-  --l-inst-main-l: url("logos/ML_logo_light.png");
-  --l-inst-icon-l: url("logos/ML_symbol_light.png");
-  --l-dept-main-l: url("logos/CS_logo_light.png");
-  --l-dept-icon-l: url("logos/CS_symbol_light.png");
+  --l-inst-main-l: url("logos/databricks-x-hack-nation-logo.png");
+  --l-inst-icon-l: url("logos/hack-nation-logo.png");
+  --l-dept-main-l: url("logos/geo-care-symbol.png");
+  --l-dept-icon-l: url("logos/geo-care-logo.png");
+  --l-extra-icon-l: url("logos/databricks-logo.png");
 }

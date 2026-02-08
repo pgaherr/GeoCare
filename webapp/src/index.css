@@ -1,0 +1,18 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Make sure the map takes up the entire container */
+.leaflet-container {
+  width: 100%;
+  height: 100%;
+}
+
+/*Optional: Customize the scrollbar for better aesthetics */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-thumb {
+  background-color: #cbd5e1;
+  border-radius: 4px;
+}

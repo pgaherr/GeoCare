@@ -192,27 +192,51 @@ export default function UrbanLayoutApp() {
   const [timeRange, setTimeRange] = useState(50);
   const [popularity, setPopularity] = useState(true);
 
-  // Search Logic
+  // Loading State
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchError, setSearchError] = useState(null);
+
+  // Search Logic - calls FastAPI backend
   const handleSearch = async (e) => {
     e.preventDefault();
-    if (!query) return;
+    if (!query.trim()) return;
+
+    setIsSearching(true);
+    setSearchError(null);
 
     try {
-      const res = await fetch(
-        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&addressdetails=1&limit=15`
-      );
+      const res = await fetch("http://localhost:8000/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: query.trim() }),
+      });
+      
+      if (!res.ok) {
+        throw new Error(`Search failed: ${res.status}`);
+      }
+      
       const data = await res.json();
       
-      // MOCK DATA ENRICHMENT: Assign a random "Confidence Score" (1-5) to each result
-      const enrichedData = data.map(item => ({
-        ...item,
-        confidenceScore: Math.floor(Math.random() * 5) + 1 // Random 1-5
+      // Map backend response to frontend format
+      const enrichedData = data.map((item, index) => ({
+        place_id: `facility_${index}`,
+        name: item.name,
+        display_name: item.name + (item.reason ? ` — ${item.reason}` : ""),
+        officialWebsite: item.officialWebsite,
+        capabilities: item.capabilities || [],
+        confidenceScore: item.score,
+        // Note: lat/lon not available from backend yet
+        lat: null,
+        lon: null,
       }));
 
       setResults(enrichedData);
       setSidebarOpen(true);
     } catch (error) {
       console.error("Search error:", error);
+      setSearchError(error.message);
+    } finally {
+      setIsSearching(false);
     }
   };
 
@@ -343,33 +367,62 @@ export default function UrbanLayoutApp() {
         </div>
 
         <div className="flex-1 overflow-y-auto p-2 space-y-2">
-           {results.length === 0 && (
-             <div className="text-center p-8 text-slate-400 text-sm">
-               Search for a location to populate this list.
+           {/* Loading State */}
+           {isSearching && (
+             <div className="text-center p-8 text-slate-500 text-sm">
+               <div className="animate-spin w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full mx-auto mb-2"></div>
+               Searching facilities...
              </div>
            )}
 
-           {filteredResults.map((place) => (
+           {/* Error State */}
+           {searchError && !isSearching && (
+             <div className="text-center p-4 text-red-500 text-sm bg-red-50 rounded-xl mx-2">
+               {searchError}
+             </div>
+           )}
+
+           {/* Empty State */}
+           {results.length === 0 && !isSearching && !searchError && (
+             <div className="text-center p-8 text-slate-400 text-sm">
+               Ask a healthcare question to find facilities.
+             </div>
+           )}
+
+           {/* Results List */}
+           {!isSearching && filteredResults.map((place) => (
              <div 
                key={place.place_id}
-               onClick={() => setMapPosition([parseFloat(place.lat), parseFloat(place.lon)])}
                className="p-3 rounded-xl hover:bg-blue-50 cursor-pointer group transition-colors border border-transparent hover:border-blue-100"
              >
                <h3 className="font-semibold text-slate-800 text-sm group-hover:text-blue-600 mb-1">
-                 {place.name || place.display_name.split(',')[0]}
+                 {place.name || "Unknown Facility"}
                </h3>
                <p className="text-xs text-slate-500 line-clamp-2 mb-2">
                  {place.display_name}
                </p>
                
-               {/* Result Logic Visualization */}
+               {/* Website Link */}
+               {place.officialWebsite && (
+                 <a 
+                   href={place.officialWebsite} 
+                   target="_blank" 
+                   rel="noopener noreferrer"
+                   onClick={(e) => e.stopPropagation()}
+                   className="text-xs text-blue-600 hover:underline block mb-2"
+                 >
+                   Visit Website →
+                 </a>
+               )}
+               
+               {/* Confidence Score Stars */}
                <div className="flex items-center gap-2">
                  <div className="flex text-yellow-400">
-                   {[...Array(place.confidenceScore)].map((_, i) => (
+                   {[...Array(place.confidenceScore || 0)].map((_, i) => (
                      <svg key={i} className="w-3 h-3 fill-current" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" /></svg>
                    ))}
                  </div>
-                 <span className="text-[10px] text-slate-400 font-medium">Confidence</span>
+                 <span className="text-[10px] text-slate-400 font-medium">Relevance</span>
                </div>
              </div>
            ))}

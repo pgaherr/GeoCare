@@ -10,3 +10,7 @@ __pycache__/
 
 # Ignore IDE files
 .vscode/
+
+api_keys.py
+
+cache

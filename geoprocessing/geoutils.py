@@ -5,8 +5,11 @@ from rapidfuzz import process, fuzz
 from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut, GeocoderServiceError
 import geopandas as gpd
+from shapely.geometry import Point
+from opencage.geocoder import OpenCageGeocode
 from typing import List, Dict
 import osmnx as ox
+import warnings
 
 
 def get_city_geometry(city_name: str) -> gpd.GeoDataFrame:
@@ -29,6 +32,105 @@ def get_city_geometry(city_name: str) -> gpd.GeoDataFrame:
     # Ensure CRS is WGS84
     gdf = gdf.to_crs(epsg=4326)
     return gdf
+
+
+def get_address_point(
+    address: str, api_key: str, countrycode: str | None = None
+) -> gpd.GeoDataFrame:
+    """
+    Geocode an address using Nominatim first; if it fails, fallback to OpenCage.
+
+    Parameters
+    ----------
+    address : str
+        Full address to geocode.
+    api_key : str
+        OpenCage API key.
+
+    Returns
+    -------
+    gdf : geopandas.GeoDataFrame
+        GeoDataFrame with a single Point geometry in EPSG:4326.
+        If geocoding fails for both, geometry will be None.
+    """
+    # First try Nominatim / OSMnx
+    try:
+        if address and address.strip():
+            gdf = ox.geocode_to_gdf(address).to_crs(epsg=4326)
+            # Ensure Point geometry
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore", message="Geometry is in a geographic CRS"
+                )
+                gdf["geometry"] = gdf.geometry.centroid
+            return gdf.geometry.iloc[0].wkt
+    except Exception:
+        pass  # fallback to OpenCage
+
+    # Fallback to OpenCage
+    oc = OpenCageGeocode(api_key)
+    if not address or not address.strip():
+        return gpd.GeoDataFrame([{"geometry": None}], crs="EPSG:4326")
+
+    results = oc.geocode(address, no_annotations=1, limit=1)
+    if results:
+        lat = results[0]["geometry"]["lat"]
+        lon = results[0]["geometry"]["lng"]
+        point = Point(lon, lat)
+    else:
+        raise Exception(f"Nothing got returned for {address}, {countrycode}")
+
+    gdf = gpd.GeoDataFrame([{"geometry": point}], crs="EPSG:4326")
+    return gdf.geometry.iloc[0].wkt
+
+
+def get_address_point_nominatim(
+    address: str, countrycode: str | None = None
+) -> str | None:
+    """
+    Geocode an address using Nominatim and return WKT Point.
+    """
+
+    if not address or not address.strip():
+        return None
+
+    query = f"{address}, {countrycode}" if countrycode else address
+
+    gdf = ox.geocode_to_gdf(query).to_crs(epsg=4326)
+
+    # Safe centroid (project first)
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="Geometry is in a geographic CRS")
+        geom = gdf.to_crs(epsg=3857).geometry.centroid.to_crs(epsg=4326).iloc[0]
+
+    return geom.wkt
+
+
+def get_address_point_opencage(
+    address: str, api_key: str, countrycode: str | None = None
+) -> str | None:
+    """
+    Geocode an address using OpenCage and return WKT Point.
+    """
+
+    if not address or not address.strip():
+        return None
+
+    oc = OpenCageGeocode(api_key)
+
+    results = oc.geocode(
+        address,
+        countrycode=countrycode.lower() if countrycode else None,
+        no_annotations=1,
+        limit=1,
+    )
+
+    if results:
+        lat = results[0]["geometry"]["lat"]
+        lon = results[0]["geometry"]["lng"]
+        return Point(lon, lat).wkt
+
+    return None
 
 
 def get_geographic_suggestions_from_string(

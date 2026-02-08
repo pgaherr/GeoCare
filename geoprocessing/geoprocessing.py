@@ -159,58 +159,46 @@ def get_quality_matrix(
     pd.DataFrame
         Pivoted quality matrix
     """
-    quality_matrix = (
-        data.apply(
-            lambda row: [
-                {
-                    "distance_grid": d,
-                    "service_quality": row["service_quality"],
-                    "quality_grid": quality_func(row["stars"], d),
-                }
-                for d in distance_grid
-            ],
-            axis=1,
-        )
-        .explode()
-        .apply(pd.Series)
-        .drop_duplicates(["service_quality", "distance_grid", "quality_grid"])
-        .reset_index(drop=True)
-    )
+    # Get unique star values and their service qualities
+    unique = data[["stars", "service_quality"]].drop_duplicates()
+    stars_arr = unique["stars"].values
+    sq_arr = unique["service_quality"].values
 
+    # Vectorized: compute quality for all (stars, distance) combinations via broadcasting
+    # stars_arr[:, None] is (n_stars, 1), distance_grid[None, :] is (1, n_dist)
+    raw_quality = quality_func(stars_arr[:, None], distance_grid[None, :])
+
+    # Discretize into n_accessibility_grades bins
     quality_grid = np.linspace(0, 1, n_accessibility_grades + 1)
-    idx = np.searchsorted(quality_grid, quality_matrix["quality_grid"], side="left")
-    idx = np.clip(idx, 0, len(quality_grid) - 1)
+    idx = np.clip(np.searchsorted(quality_grid, raw_quality, side="left"), 0, len(quality_grid) - 1)
+    discretized = np.round(quality_grid[idx], 3)
 
-    quality_matrix["quality_grid"] = quality_grid[idx]
-    quality_matrix["quality_grid"] = quality_matrix["quality_grid"].round(3)
-
-    quality_matrix = (
-        quality_matrix.drop_duplicates(
-            ["service_quality", "distance_grid", "quality_grid"]
-        )
-        .pivot(index="service_quality", columns="distance_grid", values="quality_grid")
-        .reset_index()
-    )
+    # Build pivoted DataFrame directly
+    quality_matrix = pd.DataFrame(discretized, columns=distance_grid, index=sq_arr)
+    quality_matrix = quality_matrix[~quality_matrix.index.duplicated(keep="first")]
+    quality_matrix.index.name = None
+    quality_matrix["service_quality"] = quality_matrix.index
+    quality_matrix = quality_matrix.reset_index(drop=True)
 
     return quality_matrix
 
-def get_pop_h3(aoi,results_path,h3_pop_resolution = 8):
-    pop_h3_path = results_path+f"/population_h3_res_{h3_pop_resolution}.csv"
+def get_pop_h3(aoi, results_path, h3_pop_resolution=8):
+    pop_h3_path = os.path.join(results_path, f"population_h3_res_{h3_pop_resolution}.csv")
     if os.path.isfile(pop_h3_path):
-        pop_h3_df = pd.read_csv(pop_h3_path)
-    else:
-        population_file = population.download_worldpop_population(
-            aoi,
-            2025,
-            folder=results_path,
-            resolution="1km",
-        )
-        pop_h3_df = h3_utils.from_raster(population_file,aoi=aoi,resolution=h3_pop_resolution,method="distribute")
-        pop_h3_df = pop_h3_df.rename(columns={'value':'population'})
-        pop_h3_df.reset_index().to_csv(pop_h3_path)
+        return pd.read_csv(pop_h3_path).set_index("h3_cell")
 
-    pop_h3_df = pd.read_csv(pop_h3_path).set_index("h3_cell")
-    return pop_h3_df 
+    population_file = population.download_worldpop_population(
+        aoi,
+        2025,
+        folder=results_path,
+        resolution="1km",
+    )
+    pop_h3_df = h3_utils.from_raster(
+        population_file, aoi=aoi, resolution=h3_pop_resolution, method="distribute"
+    )
+    pop_h3_df = pop_h3_df.rename(columns={"value": "population"})
+    pop_h3_df.reset_index().to_csv(pop_h3_path, index=False)
+    return pop_h3_df
 
 
 def coverage(

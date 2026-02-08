@@ -20,78 +20,116 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "geoprocessing"))
 from ranking_agent import rank_facilities, rank_facilities_gdf
 
 # Import geoprocessing (only when needed to avoid startup delays)
-def run_coverage_pipeline(query: str, include_h3_pop: bool = True):
-    """
-    Run the full geoprocessing pipeline and return all GeoJSON layers.
-    
-    Returns dict with:
-        - aoi: Ghana boundary (GeoDataFrame)
-        - facilities: Ranked facilities with geometry (GeoDataFrame)
-        - isochrones: Buffer polygons with accessibility bands (GeoDataFrame)
-        - h3_accessibility: H3 cells with accessibility values (DataFrame)
-        - h3_population: H3 cells with population and accessibility (GeoDataFrame)
-        - config: Pipeline configuration for frontend
-    """
-    import geoprocessing
+_RESULTS_PATH = Path(__file__).parent.parent.parent / "geoprocessing" / "results"
+_H3_RESOLUTION = 5
+_REFERENCE_DISTANCE = 1000
+_MAX_DISTANCE = 80000
+_ELASTICITY = 0.5
+
+# Module-level caches — static data that never changes between requests
+_aoi_cache = None
+_pop_h3_geojson_cache = None
+# Facilities from the last pipeline run — used by /coverage/recompute
+_last_facilities_gdf = None
+
+
+def _get_aoi():
+    global _aoi_cache
+    if _aoi_cache is not None:
+        return _aoi_cache
     import geopandas as gpd
-    
-    RESULTS_PATH = Path(__file__).parent.parent.parent / "geoprocessing" / "results"
-    H3_RESOLUTION = 5
-    REFERENCE_DISTANCE = 1000
-    MAX_DISTANCE = 80000
-    ELASTICITY = 0.5
-    
-    # Get AOI (Ghana boundary, cached)
-    cache_path = RESULTS_PATH / "ghana_boundary.geojson"
+    cache_path = _RESULTS_PATH / "ghana_boundary.geojson"
     if cache_path.exists():
-        aoi = gpd.read_file(cache_path)
+        _aoi_cache = gpd.read_file(cache_path)
     else:
         from shapely.geometry import box
         ghana_bbox = box(-3.5, 4.5, 1.5, 11.5)
-        aoi = gpd.GeoDataFrame(geometry=[ghana_bbox], crs="EPSG:4326")
-    
+        _aoi_cache = gpd.GeoDataFrame(geometry=[ghana_bbox], crs="EPSG:4326")
+    return _aoi_cache
+
+
+def _get_pop_h3_geojson():
+    """Load population H3 hexagons (cached — static data)."""
+    global _pop_h3_geojson_cache
+    if _pop_h3_geojson_cache is not None:
+        return _pop_h3_geojson_cache
+    import geoprocessing
+    import h3_utils
+    aoi = _get_aoi()
+    pop_h3 = geoprocessing.get_pop_h3(aoi, str(_RESULTS_PATH), h3_pop_resolution=_H3_RESOLUTION)
+    pop_h3 = pop_h3[pop_h3["population"] > 1]
+    pop_gdf = h3_utils.to_gdf(pop_h3)
+    if pop_gdf.crs is None:
+        pop_gdf = pop_gdf.set_crs("EPSG:4326")
+    elif pop_gdf.crs.to_epsg() != 4326:
+        pop_gdf = pop_gdf.to_crs("EPSG:4326")
+    _pop_h3_geojson_cache = json.loads(pop_gdf.to_json())
+    return _pop_h3_geojson_cache
+
+
+def _to_geojson_wgs84(gdf):
+    """Ensure CRS is WGS84 and convert GeoDataFrame to GeoJSON dict."""
+    if gdf.crs is None:
+        gdf = gdf.set_crs("EPSG:4326")
+    elif gdf.crs.to_epsg() != 4326:
+        gdf = gdf.to_crs("EPSG:4326")
+    return json.loads(gdf.to_json())
+
+
+def _run_coverage(facilities_gdf):
+    """Run coverage analysis on a facilities GeoDataFrame. Returns (iso_geojson, h3_geojson)."""
+    import geoprocessing
+    import h3_utils
+    result = geoprocessing.coverage(
+        facilities_gdf,
+        elasticity=_ELASTICITY,
+        reference_distance=_REFERENCE_DISTANCE,
+        max_distance=_MAX_DISTANCE,
+        pop_h3=None,
+        h3_resolution=_H3_RESOLUTION,
+    )
+    iso_df, iso_df_h3 = result
+    iso_geojson = _to_geojson_wgs84(iso_df)
+    h3_geojson = None
+    if iso_df_h3 is not None:
+        h3_geojson = _to_geojson_wgs84(h3_utils.to_gdf(iso_df_h3))
+    return iso_geojson, h3_geojson
+
+
+def run_coverage_pipeline(query: str):
+    """
+    Run the full geoprocessing pipeline and return all GeoJSON layers.
+    Caches facilities_gdf for subsequent /coverage/recompute calls.
+    """
+    global _last_facilities_gdf
+
+    aoi = _get_aoi()
+
     # Get facilities via ranking agent
     facilities_gdf = rank_facilities_gdf(query)
     if facilities_gdf.empty:
         return None
-    
+
     facilities_gdf = facilities_gdf[facilities_gdf["geometry"].notna()]
     if facilities_gdf.empty:
         return None
-    
-    # Get population data (cached)
-    pop_h3 = None
-    if include_h3_pop:
-        pop_h3 = geoprocessing.get_pop_h3(aoi, str(RESULTS_PATH), h3_pop_resolution=H3_RESOLUTION)
-    
-    # Run coverage analysis - get all outputs
-    result = geoprocessing.coverage(
-        facilities_gdf,
-        elasticity=ELASTICITY,
-        reference_distance=REFERENCE_DISTANCE,
-        max_distance=MAX_DISTANCE,
-        pop_h3=pop_h3,
-        h3_resolution=H3_RESOLUTION,
-    )
-    
-    # Unpack based on what was returned
-    if include_h3_pop:
-        iso_df, iso_df_h3, iso_df_h3_pop = result
-    else:
-        iso_df, iso_df_h3 = result
-        iso_df_h3_pop = None
-    
+
+    # Cache for recompute endpoint
+    _last_facilities_gdf = facilities_gdf.copy()
+
+    # Run coverage analysis
+    iso_geojson, h3_geojson = _run_coverage(facilities_gdf)
+
     return {
         "aoi": aoi,
         "facilities": facilities_gdf,
-        "isochrones": iso_df,  # Buffer polygons with accessibility bands
-        "h3_accessibility": iso_df_h3,  # H3 cells with accessibility
-        "h3_population": iso_df_h3_pop,  # H3 cells with population
+        "isochrones_geojson": iso_geojson,
+        "h3_accessibility_geojson": h3_geojson,
         "config": {
-            "h3_resolution": H3_RESOLUTION,
-            "reference_distance": REFERENCE_DISTANCE,
-            "max_distance": MAX_DISTANCE,
-            "elasticity": ELASTICITY,
+            "h3_resolution": _H3_RESOLUTION,
+            "reference_distance": _REFERENCE_DISTANCE,
+            "max_distance": _MAX_DISTANCE,
+            "elasticity": _ELASTICITY,
         }
     }
 
@@ -118,6 +156,10 @@ app.add_middleware(
 
 class SearchRequest(BaseModel):
     query: str
+
+
+class RecomputeRequest(BaseModel):
+    min_stars: int = 1
 
 
 class FacilityResult(BaseModel):
@@ -192,7 +234,7 @@ async def search_with_coverage(request: SearchRequest):
     
     try:
         result = run_coverage_pipeline(request.query)
-        
+
         if result is None:
             return {
                 "query": request.query,
@@ -201,37 +243,18 @@ async def search_with_coverage(request: SearchRequest):
                 "layers": {},
                 "config": {}
             }
-        
-        # Helper to ensure CRS is WGS84 for Leaflet
-        def to_geojson_wgs84(gdf):
-            if gdf.crs is None:
-                gdf = gdf.set_crs("EPSG:4326")
-            elif gdf.crs.to_epsg() != 4326:
-                gdf = gdf.to_crs("EPSG:4326")
-            return json.loads(gdf.to_json())
-        
-        # Build response with all layers as GeoJSON (all in WGS84)
+
         layers = {
-            "aoi": to_geojson_wgs84(result["aoi"]),
-            "facilities": to_geojson_wgs84(result["facilities"]),
-            "isochrones": to_geojson_wgs84(result["isochrones"]),
+            "aoi": _to_geojson_wgs84(result["aoi"]),
+            "facilities": _to_geojson_wgs84(result["facilities"]),
+            "isochrones": result["isochrones_geojson"],
+            "h3_accessibility": result["h3_accessibility_geojson"],
+            "h3_population": _get_pop_h3_geojson(),
         }
-        
-        # H3 accessibility (convert to GeoDataFrame if needed)
-        if result["h3_accessibility"] is not None:
-            import h3_utils
-            h3_gdf = h3_utils.to_gdf(result["h3_accessibility"])
-            layers["h3_accessibility"] = to_geojson_wgs84(h3_gdf)
-        
-        # H3 population
-        if result["h3_population"] is not None:
-            layers["h3_population"] = to_geojson_wgs84(result["h3_population"])
-        
+
         return {
             "query": request.query,
             "facilities_count": len(result["facilities"]),
-            "isochrone_bands": len(result["isochrones"]),
-            "h3_cells": len(result["h3_accessibility"]) if result["h3_accessibility"] is not None else 0,
             "layers": layers,
             "config": result["config"],
         }
@@ -239,6 +262,37 @@ async def search_with_coverage(request: SearchRequest):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Pipeline failed: {str(e)}")
+
+
+@app.post("/coverage/recompute")
+async def recompute_coverage(request: RecomputeRequest):
+    """
+    Recompute coverage layers for a star threshold using cached facilities.
+    Much faster than the full pipeline (no Genie/LLM, just geoprocessing).
+    """
+    if _last_facilities_gdf is None:
+        raise HTTPException(status_code=400, detail="No facilities cached. Run /search/pipeline first.")
+
+    try:
+        filtered = _last_facilities_gdf[
+            _last_facilities_gdf["stars"] >= request.min_stars
+        ]
+        filtered = filtered[filtered["geometry"].notna()]
+
+        if filtered.empty:
+            return {"layers": {"isochrones": None, "h3_accessibility": None}}
+
+        iso_geojson, h3_geojson = _run_coverage(filtered)
+        return {
+            "layers": {
+                "isochrones": iso_geojson,
+                "h3_accessibility": h3_geojson,
+            }
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Recompute failed: {str(e)}")
 
 
 # Coverage GeoJSON files (pre-generated by run_pipeline.py)

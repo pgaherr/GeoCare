@@ -27,7 +27,11 @@ import {
   Info,
   Pencil,
   Star,
+  Users,
 } from "lucide-react";
+import { union } from '@turf/union';
+import { difference } from '@turf/difference';
+import { featureCollection } from '@turf/helpers';
 import "leaflet/dist/leaflet.css";
 import "leaflet-draw/dist/leaflet.draw.css";
 
@@ -202,9 +206,75 @@ export default function UrbanLayoutApp() {
   const [facilitiesLayer, setFacilitiesLayer] = useState(null);
   const [isochronesLayer, setIsochronesLayer] = useState(null);
   const [h3AccessibilityLayer, setH3AccessibilityLayer] = useState(null);
-  
-  // Coverage display mode: 'buffers' or 'h3'
+  const [h3PopulationLayer, setH3PopulationLayer] = useState(null);
+  const [aoiLayer, setAoiLayer] = useState(null);  // Ghana boundary for "desert" visualization
+
+  // Original layers from initial pipeline (for restoring when star filter returns to 1)
+  const [origIsochronesLayer, setOrigIsochronesLayer] = useState(null);
+  const [origH3AccessibilityLayer, setOrigH3AccessibilityLayer] = useState(null);
+
+  // Coverage display mode: 'buffers' | 'h3'
   const [coverageMode, setCoverageMode] = useState('buffers');
+
+  // Population overlay toggle (independent of coverage mode)
+  const [showPopulation, setShowPopulation] = useState(false);
+
+  // Recompute loading state
+  const [isRecomputing, setIsRecomputing] = useState(false);
+
+  // Compute "desert" layer: Ghana boundary minus coverage areas
+  const desertLayer = useMemo(() => {
+    if (!aoiLayer) return null;
+
+    const coverageData = coverageMode === 'buffers'
+      ? isochronesLayer
+      : h3AccessibilityLayer;
+
+    if (!coverageData?.features?.length) {
+      return aoiLayer; // No coverage — entire AOI is desert
+    }
+
+    // Union all coverage features into one polygon
+    let coverageUnion = null;
+    for (const feature of coverageData.features) {
+      if (!feature.geometry) continue;
+      if (coverageUnion === null) {
+        coverageUnion = feature;
+      } else {
+        try {
+          coverageUnion = union(featureCollection([coverageUnion, feature]));
+        } catch (e) {
+          console.warn('Union failed for feature, skipping:', e);
+        }
+      }
+    }
+
+    if (!coverageUnion) return aoiLayer;
+
+    // Subtract coverage from each AOI feature
+    const desertFeatures = [];
+    for (const aoiFeature of aoiLayer.features) {
+      try {
+        const desert = difference(featureCollection([aoiFeature, coverageUnion]));
+        if (desert) desertFeatures.push(desert);
+      } catch (e) {
+        console.warn('Difference failed:', e);
+      }
+    }
+
+    return desertFeatures.length > 0
+      ? { type: 'FeatureCollection', features: desertFeatures }
+      : null;
+  }, [aoiLayer, isochronesLayer, h3AccessibilityLayer, coverageMode]);
+  
+  // Desert style - brown fill for healthcare "deserts" (uncovered areas)
+  const getAoiStyle = () => ({
+    fillColor: '#8B4513',  // SaddleBrown
+    fillOpacity: 0.55,
+    weight: 0,
+    color: 'transparent',
+    opacity: 0,
+  });
 
   // Isochrone style function - color by accessibility
   const getIsochroneStyle = (feature) => {
@@ -217,6 +287,22 @@ export default function UrbanLayoutApp() {
       weight: 2,         // Thicker border
       color: `hsl(${hue}, 80%, 30%)`,
       opacity: 1.0,
+    };
+  };
+
+  // Population style function - choropleth by population density
+  const getPopulationStyle = (feature) => {
+    const pop = feature.properties?.population || 0;
+    // Log scale: most cells 0-5000, some up to 50k+
+    const t = Math.min(Math.log10(Math.max(pop, 1)) / 4.5, 1); // log10(~30000)≈4.5
+    // Light purple → dark purple
+    const lightness = 85 - t * 50; // 85% (light) → 35% (dark)
+    return {
+      fillColor: `hsl(270, 60%, ${lightness}%)`,
+      fillOpacity: 0.45,
+      weight: 1,
+      color: `hsl(270, 60%, ${Math.max(lightness - 15, 20)}%)`,
+      opacity: 0.4,
     };
   };
 
@@ -248,18 +334,20 @@ export default function UrbanLayoutApp() {
       }
       
       // Set GeoJSON layers for map
-      if (data.layers?.facilities) {
-        console.log("Setting facilities layer:", data.layers.facilities.features?.length, "features");
-        setFacilitiesLayer(data.layers.facilities);
-      }
+      if (data.layers?.aoi) setAoiLayer(data.layers.aoi);
+      if (data.layers?.facilities) setFacilitiesLayer(data.layers.facilities);
       if (data.layers?.isochrones) {
-        console.log("Setting isochrones layer:", data.layers.isochrones.features?.length, "features");
         setIsochronesLayer(data.layers.isochrones);
+        setOrigIsochronesLayer(data.layers.isochrones);
       }
       if (data.layers?.h3_accessibility) {
-        console.log("Setting H3 accessibility layer:", data.layers.h3_accessibility.features?.length, "features");
         setH3AccessibilityLayer(data.layers.h3_accessibility);
+        setOrigH3AccessibilityLayer(data.layers.h3_accessibility);
       }
+      if (data.layers?.h3_population) setH3PopulationLayer(data.layers.h3_population);
+
+      // Reset star filter to "All" on new search
+      setMinConfidence(1);
       
       // Map facilities to sidebar format
       const facilities = data.layers?.facilities?.features || [];
@@ -288,6 +376,39 @@ export default function UrbanLayoutApp() {
       setIsSearching(false);
     }
   };
+
+  // Recompute coverage when star filter changes
+  useEffect(() => {
+    // minConfidence===1 means "show all" — restore original layers
+    if (minConfidence === 1) {
+      if (origIsochronesLayer) setIsochronesLayer(origIsochronesLayer);
+      if (origH3AccessibilityLayer) setH3AccessibilityLayer(origH3AccessibilityLayer);
+      return;
+    }
+    // No facilities loaded yet — nothing to recompute
+    if (!facilitiesLayer) return;
+
+    let cancelled = false;
+    setIsRecomputing(true);
+
+    fetch("http://localhost:8000/coverage/recompute", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ min_stars: minConfidence }),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (cancelled) return;
+        if (data.layers?.isochrones) setIsochronesLayer(data.layers.isochrones);
+        else setIsochronesLayer(null);
+        if (data.layers?.h3_accessibility) setH3AccessibilityLayer(data.layers.h3_accessibility);
+        else setH3AccessibilityLayer(null);
+      })
+      .catch((err) => console.error("Recompute failed:", err))
+      .finally(() => { if (!cancelled) setIsRecomputing(false); });
+
+    return () => { cancelled = true; };
+  }, [minConfidence]);
 
   // Filter Results based on Confidence Selector
   const filteredResults = useMemo(() => {
@@ -319,19 +440,52 @@ export default function UrbanLayoutApp() {
           
           <RecenterMap lat={mapPosition[0]} lon={mapPosition[1]} />
 
-          {/* Coverage Layer - Either Buffers or H3 Hexagons */}
+          {/* Desert Layer - Brown fill only for areas NOT covered by isochrones */}
+          {desertLayer && (
+            <GeoJSON
+              key={`desert-${coverageMode}-${minConfidence}-${Date.now()}`}
+              data={desertLayer}
+              style={getAoiStyle}
+            />
+          )}
+
+          {/* Ghana border outline (always visible when data loaded) */}
+          {aoiLayer && (
+            <GeoJSON
+              key={`aoi-border-${Date.now()}`}
+              data={aoiLayer}
+              style={() => ({
+                fillColor: 'transparent',
+                fillOpacity: 0,
+                weight: 2,
+                color: '#5C3317',
+                opacity: 1.0,
+                dashArray: '5,5',
+              })}
+            />
+          )}
+
+          {/* Coverage Layer - Buffers or H3 Hexagons */}
           {coverageMode === 'buffers' && isochronesLayer && (
             <GeoJSON
-              key={`isochrones-${Date.now()}`}
+              key={`isochrones-${minConfidence}-${Date.now()}`}
               data={isochronesLayer}
               style={getIsochroneStyle}
             />
           )}
           {coverageMode === 'h3' && h3AccessibilityLayer && (
             <GeoJSON
-              key={`h3-${Date.now()}`}
+              key={`h3-${minConfidence}-${Date.now()}`}
               data={h3AccessibilityLayer}
               style={getIsochroneStyle}
+            />
+          )}
+          {/* Population Overlay */}
+          {showPopulation && h3PopulationLayer && (
+            <GeoJSON
+              key={`population-${Date.now()}`}
+              data={h3PopulationLayer}
+              style={getPopulationStyle}
             />
           )}
 
@@ -448,17 +602,29 @@ export default function UrbanLayoutApp() {
              <button className="flex items-center gap-1.5 px-3 py-1.5 bg-white/90 backdrop-blur rounded-full text-xs font-semibold text-slate-600 shadow-sm border border-slate-200 hover:bg-slate-50">
                <MapPin className="w-3 h-3" /> Area Selection
              </button>
-             {/* Coverage Mode Toggle */}
-             <button 
+             {/* Coverage Mode Toggle (Buffers ↔ H3) */}
+             <button
                onClick={() => setCoverageMode(coverageMode === 'buffers' ? 'h3' : 'buffers')}
                className={`flex items-center gap-1.5 px-3 py-1.5 backdrop-blur rounded-full text-xs font-semibold shadow-sm border transition-colors ${
-                 coverageMode === 'h3' 
-                   ? 'bg-blue-500 text-white border-blue-600' 
+                 coverageMode === 'h3'
+                   ? 'bg-blue-500 text-white border-blue-600'
                    : 'bg-white/90 text-slate-600 border-slate-200 hover:bg-slate-50'
                }`}
              >
-               <Layers className="w-3 h-3" /> 
+               <Layers className="w-3 h-3" />
                {coverageMode === 'buffers' ? 'Buffers' : 'H3 Hexagons'}
+             </button>
+             <button
+               onClick={() => setShowPopulation((prev) => !prev)}
+               className={`flex items-center gap-1.5 px-3 py-1.5 backdrop-blur rounded-full text-xs font-semibold shadow-sm border transition-colors ${
+                 showPopulation
+                   ? 'bg-purple-500 text-white border-purple-600'
+                   : 'bg-white/90 text-slate-600 border-slate-200 hover:bg-slate-50'
+               }`}
+               title="Toggle population overlay"
+             >
+               <Users className="w-3 h-3" />
+               Population
              </button>
            </div>
         </div>
@@ -624,8 +790,11 @@ export default function UrbanLayoutApp() {
           6. BOTTOM CONFIDENCE SELECTOR
           Z-Index: 50
       ========================================= */}
-      <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 z-50 w-full max-w-md flex justify-center px-4">
+      <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 z-50 w-full max-w-md flex justify-center items-center gap-3 px-4">
         <ConfidenceFilter value={minConfidence} onChange={setMinConfidence} />
+        {isRecomputing && (
+          <div className="animate-spin w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full" title="Recomputing coverage..." />
+        )}
       </div>
 
 

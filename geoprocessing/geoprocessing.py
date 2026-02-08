@@ -233,6 +233,7 @@ def coverage(
     iso_df = isochrones.buffers(
         data, quality_matrix, service_quality_col="service_quality"
     )
+    iso_df['accessibility'] = iso_df['accessibility'].astype(float)
 
     iso_df_h3 = None
     iso_df_h3_pop = None
@@ -258,6 +259,7 @@ def coverage(
         iso_df_h3_pop = pop_h3.merge(
             iso_df_h3, left_index=True, right_index=True, how="left"
         )
+        iso_df_h3_pop["accessibility"] = iso_df_h3_pop["accessibility"].fillna(0)
         iso_df_h3_pop = iso_df_h3_pop[iso_df_h3_pop['population'] > 1]
         iso_df_h3_pop = h3_utils.to_gdf(iso_df_h3_pop)
         iso_df_h3_pop.geometry = iso_df_h3_pop.geometry.centroid
@@ -282,7 +284,7 @@ def poi_distance_quality(
     utm_crs = poi.estimate_utm_crs()
     poi = poi.to_crs(utm_crs)
     data = data.to_crs(utm_crs)
-    data = data[shapely.buffer(poi.union_all(),max_distance)]
+    data = data[data.geometry.intersects(shapely.buffer(poi.union_all(),max_distance))]
     data["distance_to_poi"] = data.geometry.map(
         lambda geom: poi.distance(geom).min()
     )

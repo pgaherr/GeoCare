@@ -10,3 +10,12 @@ __pycache__/
 
 # Ignore IDE files
 .vscode/
+
+# Generated data (DBs and enriched CSVs)
+agentic_retrieval/data/output/
+
+# Secrets
+.env
+api_keys.py
+
+cache

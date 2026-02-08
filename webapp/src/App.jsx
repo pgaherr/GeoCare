@@ -6,8 +6,8 @@ import {
   Popup, 
   useMap, 
   FeatureGroup,
-  ZoomControl,
-  AttributionControl,
+  GeoJSON,
+  CircleMarker,
   useMapEvents 
 } from "react-leaflet";
 import { EditControl } from "react-leaflet-draw";
@@ -20,7 +20,6 @@ import {
   Filter, 
   MapPin,
   Settings,
-  User,
   ChevronLeft,
   Clock,
   Activity,
@@ -33,8 +32,12 @@ import {
   HelpCircle,
   ExternalLink,
   Navigation,
-  Trash2
+  Trash2,
+  Users,
 } from "lucide-react";
+import { union } from '@turf/union';
+import { difference } from '@turf/difference';
+import { featureCollection } from '@turf/helpers';
 import "leaflet/dist/leaflet.css";
 import "leaflet-draw/dist/leaflet.draw.css";
 
@@ -62,8 +65,7 @@ const WelcomeModal = ({ onClose }) => {
           <p className="text-slate-600 text-lg mb-6 leading-relaxed">
             Explore and ask about healthcare facilities with our interactive AI mapping tool.
           </p>
-          {/* ... (Resto del contenido del modal igual que antes) ... */}
-           <div className="space-y-4 mb-8">
+          <div className="space-y-4 mb-8">
             <div className="flex items-start gap-3">
               <div className="p-2 bg-slate-50 rounded-lg border border-slate-100">
                 <Search className="w-4 h-4 text-blue-500" />
@@ -198,7 +200,7 @@ const MapDrawHandler = ({ isDrawing, onDrawReady, onDrawCreated }) => {
   return null;
 };
 
-
+// Red marker icon for point capture
 const redIcon = new L.Icon({
   iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
@@ -208,7 +210,7 @@ const redIcon = new L.Icon({
   shadowSize: [41, 41]
 });
 
-
+// 5. Point Capture Handler
 const PointCaptureHandler = ({ isActive, onPointCaptured }) => {
   useMapEvents({
     click(e) {
@@ -230,7 +232,7 @@ export default function App() {
   const [showLayers, setShowLayers] = useState(false);
   const [mapLayer, setMapLayer] = useState('satellite');
   
-  // NEW: State to track which card is expanded in the sidebar
+  // Expandable sidebar cards
   const [expandedId, setExpandedId] = useState(null);
 
   // Data State
@@ -249,53 +251,197 @@ export default function App() {
   const [timeRange, setTimeRange] = useState(50);
   const [popularity, setPopularity] = useState(true);
 
+  // Point capture state
   const [isPointMode, setIsPointMode] = useState(false);
   const [poiList, setPoiList] = useState([]);
+
+  // Loading State
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchError, setSearchError] = useState(null);
+
+  // Coverage Layers from pipeline
+  const [facilitiesLayer, setFacilitiesLayer] = useState(null);
+  const [isochronesLayer, setIsochronesLayer] = useState(null);
+  const [h3AccessibilityLayer, setH3AccessibilityLayer] = useState(null);
+  const [h3PopulationLayer, setH3PopulationLayer] = useState(null);
+  const [aoiLayer, setAoiLayer] = useState(null);
+
+  // Original layers for restoring when star filter returns to 1
+  const [origIsochronesLayer, setOrigIsochronesLayer] = useState(null);
+  const [origH3AccessibilityLayer, setOrigH3AccessibilityLayer] = useState(null);
+
+  // Coverage display mode: 'buffers' | 'h3'
+  const [coverageMode, setCoverageMode] = useState('buffers');
+
+  // Population overlay toggle
+  const [showPopulation, setShowPopulation] = useState(false);
+
+  // Recompute loading state
+  const [isRecomputing, setIsRecomputing] = useState(false);
 
   // Helper function to format capability strings
   const formatCapability = (text) => {
     return text.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
   };
 
+  // Compute "desert" layer: Ghana boundary minus coverage areas
+  const desertLayer = useMemo(() => {
+    if (!aoiLayer) return null;
+
+    const coverageData = coverageMode === 'buffers'
+      ? isochronesLayer
+      : h3AccessibilityLayer;
+
+    if (!coverageData?.features?.length) {
+      return aoiLayer;
+    }
+
+    let coverageUnion = null;
+    for (const feature of coverageData.features) {
+      if (!feature.geometry) continue;
+      if (coverageUnion === null) {
+        coverageUnion = feature;
+      } else {
+        try {
+          coverageUnion = union(featureCollection([coverageUnion, feature]));
+        } catch (e) {
+          console.warn('Union failed for feature, skipping:', e);
+        }
+      }
+    }
+
+    if (!coverageUnion) return aoiLayer;
+
+    const desertFeatures = [];
+    for (const aoiFeature of aoiLayer.features) {
+      try {
+        const desert = difference(featureCollection([aoiFeature, coverageUnion]));
+        if (desert) desertFeatures.push(desert);
+      } catch (e) {
+        console.warn('Difference failed:', e);
+      }
+    }
+
+    return desertFeatures.length > 0
+      ? { type: 'FeatureCollection', features: desertFeatures }
+      : null;
+  }, [aoiLayer, isochronesLayer, h3AccessibilityLayer, coverageMode]);
+  
+  // Desert style
+  const getAoiStyle = () => ({
+    fillColor: '#8B4513',
+    fillOpacity: 0.55,
+    weight: 0,
+    color: 'transparent',
+    opacity: 0,
+  });
+
+  // Isochrone style function
+  const getIsochroneStyle = (feature) => {
+    const accessibility = parseFloat(feature.properties.accessibility) || 0;
+    const hue = accessibility * 120;
+    return {
+      fillColor: `hsl(${hue}, 80%, 45%)`,
+      fillOpacity: 0.6,
+      weight: 2,
+      color: `hsl(${hue}, 80%, 30%)`,
+      opacity: 1.0,
+    };
+  };
+
+  // Population style function
+  const getPopulationStyle = (feature) => {
+    const pop = feature.properties?.population || 0;
+    const t = Math.min(Math.log10(Math.max(pop, 1)) / 4.5, 1);
+    const lightness = 85 - t * 50;
+    return {
+      fillColor: `hsl(270, 60%, ${lightness}%)`,
+      fillOpacity: 0.45,
+      weight: 1,
+      color: `hsl(270, 60%, ${Math.max(lightness - 15, 20)}%)`,
+      opacity: 0.4,
+    };
+  };
+
   // --- Handlers ---
 
+  // Search Logic - calls FastAPI pipeline
   const handleSearch = async (e) => {
     e.preventDefault();
-    if (!query) return;
+    if (!query.trim()) return;
+
+    setIsSearching(true);
+    setSearchError(null);
+    setFacilitiesLayer(null);
+    setIsochronesLayer(null);
 
     try {
-      const res = await fetch(
-        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&addressdetails=1&limit=15`
-      );
+      const res = await fetch("http://localhost:8000/search/pipeline", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: query.trim() }),
+      });
+      
+      if (!res.ok) {
+        throw new Error(`Search failed: ${res.status}`);
+      }
+      
       const data = await res.json();
       
-      // MOCK DATA ENRICHMENT: Simulating your backend structure
-      const enrichedData = data.map(item => ({
-        ...item,
-        // Mock backend fields:
-        officialWebsite: Math.random() > 0.6 ? "https://example.com" : null,
-        score: Math.floor(Math.random() * 5) + 1,
-        reason: "National Cardiothoracic Centre performs open heart surgeries as part of a major teaching hospital.",
-        capabilities: [
-            "cancer_screening",
-            "cardiology_services",
-            "emergency_24_7",
-            "general_surgery",
-            "outpatient_services"
-        ].sort(() => 0.5 - Math.random()).slice(0, 3) // Pick 3 random capabilities
+      if (data.error) {
+        throw new Error(data.error);
+      }
+      
+      // Set GeoJSON layers for map
+      if (data.layers?.aoi) setAoiLayer(data.layers.aoi);
+      if (data.layers?.facilities) setFacilitiesLayer(data.layers.facilities);
+      if (data.layers?.isochrones) {
+        setIsochronesLayer(data.layers.isochrones);
+        setOrigIsochronesLayer(data.layers.isochrones);
+      }
+      if (data.layers?.h3_accessibility) {
+        setH3AccessibilityLayer(data.layers.h3_accessibility);
+        setOrigH3AccessibilityLayer(data.layers.h3_accessibility);
+      }
+      if (data.layers?.h3_population) setH3PopulationLayer(data.layers.h3_population);
+
+      // Reset star filter to "All" on new search
+      setMinConfidence(1);
+      
+      // Map facilities to sidebar format
+      const facilities = data.layers?.facilities?.features || [];
+      const enrichedData = facilities.map((f, index) => ({
+        place_id: `facility_${f.properties.pk_unique_id || index}`,
+        name: f.properties.name,
+        display_name: f.properties.name + (f.properties.reason ? ` — ${f.properties.reason}` : ""),
+        reason: f.properties.reason || "",
+        officialWebsite: f.properties.officialWebsite,
+        capabilities: f.properties.capabilities || [],
+        score: f.properties.stars,
+        lat: f.geometry?.coordinates?.[1],
+        lon: f.geometry?.coordinates?.[0],
       }));
 
       setResults(enrichedData);
       setSidebarOpen(true);
-      setExpandedId(null); // Reset expanded card on new search
+      setExpandedId(null);
+      
+      // Center map on Ghana if we got results
+      if (enrichedData.length > 0) {
+        setMapPosition([7.9, -1.0]);
+      }
     } catch (error) {
       console.error("Search error:", error);
+      setSearchError(error.message);
+    } finally {
+      setIsSearching(false);
     }
   };
  
+  // Point selection handlers
   const handlePointSelectionClick = () => {
     setIsPointMode(!isPointMode);
-    setIsDrawingMode(false); // Desactiva el modo dibujo si estaba activo
+    setIsDrawingMode(false);
     setSidebarOpen(false);
   };
 
@@ -315,6 +461,7 @@ export default function App() {
     setIsPointMode(false); 
   };
 
+  // Area drawing handlers
   const handleAreaSelectionClick = () => {
     setIsDrawingMode(true);
     setSidebarOpen(false);
@@ -354,8 +501,40 @@ export default function App() {
     drawnLayersRef.current = [];
   };
 
+  // Recompute coverage when star filter changes
+  useEffect(() => {
+    if (minConfidence === 1) {
+      if (origIsochronesLayer) setIsochronesLayer(origIsochronesLayer);
+      if (origH3AccessibilityLayer) setH3AccessibilityLayer(origH3AccessibilityLayer);
+      return;
+    }
+    if (!facilitiesLayer) return;
+
+    let cancelled = false;
+    setIsRecomputing(true);
+
+    fetch("http://localhost:8000/coverage/recompute", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ min_stars: minConfidence }),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (cancelled) return;
+        if (data.layers?.isochrones) setIsochronesLayer(data.layers.isochrones);
+        else setIsochronesLayer(null);
+        if (data.layers?.h3_accessibility) setH3AccessibilityLayer(data.layers.h3_accessibility);
+        else setH3AccessibilityLayer(null);
+      })
+      .catch((err) => console.error("Recompute failed:", err))
+      .finally(() => { if (!cancelled) setIsRecomputing(false); });
+
+    return () => { cancelled = true; };
+  }, [minConfidence]);
+
+  // Filter Results based on Confidence Selector
   const filteredResults = useMemo(() => {
-    return results.filter(r => r.score >= minConfidence); // Changed to use 'score' from backend mock
+    return results.filter(r => r.score >= minConfidence);
   }, [results, minConfidence]);
 
   return (
@@ -372,7 +551,6 @@ export default function App() {
           style={{ height: "100%", width: "100%" }}
           zoomControl={false}
           attributionControl={false}
-          
         >
           <TileLayer
             attribution={
@@ -397,14 +575,109 @@ export default function App() {
             onDrawCreated={handleDrawCreated}
           />
 
-          {filteredResults.map((place) => (
+          {/* Desert Layer - Brown fill for uncovered areas */}
+          {desertLayer && (
+            <GeoJSON
+              key={`desert-${coverageMode}-${minConfidence}-${Date.now()}`}
+              data={desertLayer}
+              style={getAoiStyle}
+            />
+          )}
+
+          {/* Ghana border outline */}
+          {aoiLayer && (
+            <GeoJSON
+              key={`aoi-border-${Date.now()}`}
+              data={aoiLayer}
+              style={() => ({
+                fillColor: 'transparent',
+                fillOpacity: 0,
+                weight: 2,
+                color: '#5C3317',
+                opacity: 1.0,
+                dashArray: '5,5',
+              })}
+            />
+          )}
+
+          {/* Coverage Layer - Buffers or H3 Hexagons */}
+          {coverageMode === 'buffers' && isochronesLayer && (
+            <GeoJSON
+              key={`isochrones-${minConfidence}-${Date.now()}`}
+              data={isochronesLayer}
+              style={getIsochroneStyle}
+            />
+          )}
+          {coverageMode === 'h3' && h3AccessibilityLayer && (
+            <GeoJSON
+              key={`h3-${minConfidence}-${Date.now()}`}
+              data={h3AccessibilityLayer}
+              style={getIsochroneStyle}
+            />
+          )}
+
+          {/* Population Overlay */}
+          {showPopulation && h3PopulationLayer && (
+            <GeoJSON
+              key={`population-${Date.now()}`}
+              data={h3PopulationLayer}
+              style={getPopulationStyle}
+            />
+          )}
+
+          {/* Facility Markers from GeoJSON */}
+          {facilitiesLayer && facilitiesLayer.features?.map((feature, idx) => {
+            const coords = feature.geometry?.coordinates;
+            if (!coords) return null;
+            const stars = feature.properties?.stars || 0;
+            const hue = (stars / 5) * 120;
+            return (
+              <CircleMarker
+                key={`facility-${feature.properties?.pk_unique_id || idx}`}
+                center={[coords[1], coords[0]]}
+                radius={8 + stars}
+                pathOptions={{
+                  fillColor: `hsl(${hue}, 70%, 50%)`,
+                  fillOpacity: 0.9,
+                  weight: 2,
+                  color: 'white',
+                }}
+              >
+                <Popup>
+                  <div className="p-2">
+                    <strong className="block mb-1 text-lg">{feature.properties?.name}</strong>
+                    <div className="flex items-center gap-1 mb-2">
+                      {[...Array(5)].map((_, i) => (
+                        <Star key={i} className={`w-4 h-4 ${i < stars ? 'fill-yellow-400 text-yellow-400' : 'text-gray-300'}`} />
+                      ))}
+                      <span className="ml-1 text-sm text-gray-600">({stars}/5)</span>
+                    </div>
+                    <p className="text-sm text-gray-600 mb-2">{feature.properties?.reason}</p>
+                    {feature.properties?.officialWebsite && (
+                      <a 
+                        href={`https://${feature.properties.officialWebsite}`} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="text-blue-600 hover:underline text-sm"
+                      >
+                        {feature.properties.officialWebsite}
+                      </a>
+                    )}
+                  </div>
+                </Popup>
+              </CircleMarker>
+            );
+          })}
+
+          {/* Legacy Markers for Filtered Results (fallback) */}
+          {filteredResults.filter(p => p.lat && p.lon).map((place) => (
             <Marker 
               key={place.place_id} 
               position={[parseFloat(place.lat), parseFloat(place.lon)]}
             >
               <Popup>
                 <div className="p-1">
-                   <strong className="block mb-1">{place.display_name.split(',')[0]}</strong>
+                   <strong className="block mb-1">{place.name || place.display_name?.split(',')[0]}</strong>
                    <span className="text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded">
                      {place.score} Star Confidence
                    </span>
@@ -413,7 +686,7 @@ export default function App() {
             </Marker>
           ))}
 
-          {/* Standard Edit Control (Hidden but available for management) */}
+          {/* Standard Edit Control */}
           <FeatureGroup ref={featureGroupRef}>
             <EditControl
               position="topright"
@@ -430,6 +703,7 @@ export default function App() {
             />
           </FeatureGroup>
 
+          {/* Point Capture */}
           <PointCaptureHandler 
             isActive={isPointMode} 
             onPointCaptured={handlePointCaptured} 
@@ -513,7 +787,7 @@ export default function App() {
            </div>
            
            <div className="flex gap-2 mt-3 animate-in fade-in slide-in-from-top-2">
-             {/* Botón ACTIVAR PUNTOS */}
+             {/* Point Selection Button */}
              <button 
                onClick={handlePointSelectionClick}
                className={`flex items-center gap-1.5 px-3 py-1.5 backdrop-blur rounded-full text-xs font-semibold shadow-sm border transition-all ${
@@ -526,12 +800,14 @@ export default function App() {
                Points {poiList.length > 0 && `(${poiList.length})`}
              </button>
 
-             {/* Botón BORRAR PUNTOS (solo sale si hay puntos) */}
+             {/* Clear Points Button */}
              {poiList.length > 0 && (
                 <button onClick={clearPois} className="flex items-center gap-1.5 px-2 py-1.5 bg-red-50 backdrop-blur rounded-full text-xs font-semibold text-red-600 shadow-sm border border-red-100 hover:bg-red-100">
                   <Trash2 className="w-3 h-3" />
                 </button>
              )}
+
+             {/* Area Selection Button */}
              <button 
                onClick={handleAreaSelectionClick}
                className={`flex items-center gap-1.5 px-3 py-1.5 backdrop-blur rounded-full text-xs font-semibold shadow-sm border transition-all ${
@@ -543,10 +819,37 @@ export default function App() {
                {isDrawingMode ? <CheckCircle className="w-3 h-3" /> : <MapPin className="w-3 h-3" />}
                {isDrawingMode ? "Drawing Active..." : "Area Selection"}
              </button>
+
+             {/* Coverage Mode Toggle (Buffers / H3) */}
+             <button
+               onClick={() => setCoverageMode(coverageMode === 'buffers' ? 'h3' : 'buffers')}
+               className={`flex items-center gap-1.5 px-3 py-1.5 backdrop-blur rounded-full text-xs font-semibold shadow-sm border transition-colors ${
+                 coverageMode === 'h3'
+                   ? 'bg-blue-500 text-white border-blue-600'
+                   : 'bg-white/90 text-slate-600 border-slate-200 hover:bg-slate-50'
+               }`}
+             >
+               <Layers className="w-3 h-3" />
+               {coverageMode === 'buffers' ? 'Buffers' : 'H3 Hexagons'}
+             </button>
+
+             {/* Population Toggle */}
+             <button
+               onClick={() => setShowPopulation((prev) => !prev)}
+               className={`flex items-center gap-1.5 px-3 py-1.5 backdrop-blur rounded-full text-xs font-semibold shadow-sm border transition-colors ${
+                 showPopulation
+                   ? 'bg-purple-500 text-white border-purple-600'
+                   : 'bg-white/90 text-slate-600 border-slate-200 hover:bg-slate-50'
+               }`}
+               title="Toggle population overlay"
+             >
+               <Users className="w-3 h-3" />
+               Population
+             </button>
            </div>
         </div>
 
-        {/* Right: User/Help */}
+        {/* Right: Help Button */}
         <div className="pointer-events-auto flex gap-2">
           <button onClick={() => setShowWelcome(true)} className="bg-white p-3 rounded-[20px] shadow-lg border border-slate-200 hover:bg-slate-50 transition-transform hover:scale-105 active:scale-95">
              <HelpCircle className="w-5 h-5 text-slate-700" />
@@ -554,7 +857,7 @@ export default function App() {
         </div>
       </div>
 
-      {/* 4. Sidebar Results - UPDATED WITH EXPANDABLE CARDS */}
+      {/* 4. Sidebar Results - Expandable Cards with Loading States */}
       <div 
         className={`absolute top-0 left-0 h-full w-80 bg-white/90 backdrop-blur-md shadow-2xl z-40 transform transition-transform duration-300 pt-24 border-r border-slate-200 flex flex-col ${
           sidebarOpen ? "translate-x-0" : "-translate-x-full"
@@ -568,13 +871,30 @@ export default function App() {
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
-           {results.length === 0 && (
-             <div className="text-center p-8 text-slate-400 text-sm">
-               Search for a location to see results...
+           {/* Loading State */}
+           {isSearching && (
+             <div className="text-center p-8 text-slate-500 text-sm">
+               <div className="animate-spin w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full mx-auto mb-2"></div>
+               Searching facilities...
              </div>
            )}
 
-           {filteredResults.map((place) => {
+           {/* Error State */}
+           {searchError && !isSearching && (
+             <div className="text-center p-4 text-red-500 text-sm bg-red-50 rounded-xl mx-2">
+               {searchError}
+             </div>
+           )}
+
+           {/* Empty State */}
+           {results.length === 0 && !isSearching && !searchError && (
+             <div className="text-center p-8 text-slate-400 text-sm">
+               Ask a healthcare question to find facilities.
+             </div>
+           )}
+
+           {/* Results List - Expandable Cards */}
+           {!isSearching && filteredResults.map((place) => {
              const isExpanded = expandedId === place.place_id;
 
              return (
@@ -586,18 +906,20 @@ export default function App() {
                      : "bg-white/50 border-transparent hover:bg-white hover:shadow-sm"
                  }`}
                  onClick={() => {
-                   setMapPosition([parseFloat(place.lat), parseFloat(place.lon)]);
+                   if (place.lat && place.lon) {
+                     setMapPosition([parseFloat(place.lat), parseFloat(place.lon)]);
+                   }
                    setExpandedId(isExpanded ? null : place.place_id);
                  }}
                >
-                 {/* Card Header (Always Visible) */}
+                 {/* Card Header */}
                  <div className="p-4">
                    <div className="flex justify-between items-start gap-2">
                      <h3 className={`font-bold text-sm leading-tight ${isExpanded ? 'text-blue-700' : 'text-slate-800'}`}>
-                       {place.name || place.display_name.split(',')[0]}
+                       {place.name || place.display_name?.split(',')[0]}
                      </h3>
                      <div className="flex items-center gap-1 bg-slate-100 px-1.5 py-0.5 rounded text-[10px] font-bold text-slate-600 shrink-0">
-                       <span className="text-yellow-500">★</span> {place.score}.0
+                       <span className="text-yellow-500">★</span> {place.score}
                      </div>
                    </div>
                    
@@ -612,25 +934,29 @@ export default function App() {
                  {isExpanded && (
                    <div className="px-4 pb-4 animate-in slide-in-from-top-2 duration-300">
                      
-                     <div className="mb-3 p-2 bg-slate-50 rounded-lg text-xs text-slate-600 italic border border-slate-100">
-                       "{place.reason}"
-                     </div>
-
-                     <div className="mb-3">
-                       <h4 className="text-[10px] uppercase font-bold text-slate-400 mb-1.5 tracking-wider">Capabilities</h4>
-                       <div className="flex flex-wrap gap-1.5">
-                         {place.capabilities?.map((cap, i) => (
-                           <span key={i} className="inline-flex items-center px-2 py-1 rounded-md text-[10px] font-medium bg-blue-50 text-blue-700 border border-blue-100">
-                             {formatCapability(cap)}
-                           </span>
-                         ))}
+                     {place.reason && (
+                       <div className="mb-3 p-2 bg-slate-50 rounded-lg text-xs text-slate-600 italic border border-slate-100">
+                         "{place.reason}"
                        </div>
-                     </div>
+                     )}
+
+                     {place.capabilities?.length > 0 && (
+                       <div className="mb-3">
+                         <h4 className="text-[10px] uppercase font-bold text-slate-400 mb-1.5 tracking-wider">Capabilities</h4>
+                         <div className="flex flex-wrap gap-1.5">
+                           {place.capabilities.map((cap, i) => (
+                             <span key={i} className="inline-flex items-center px-2 py-1 rounded-md text-[10px] font-medium bg-blue-50 text-blue-700 border border-blue-100">
+                               {formatCapability(cap)}
+                             </span>
+                           ))}
+                         </div>
+                       </div>
+                     )}
 
                      <div className="flex gap-2 mt-2 pt-2 border-t border-slate-100">
                         {place.officialWebsite && (
                           <a 
-                            href={place.officialWebsite} 
+                            href={place.officialWebsite.startsWith('http') ? place.officialWebsite : `https://${place.officialWebsite}`} 
                             target="_blank" 
                             rel="noreferrer"
                             onClick={(e) => e.stopPropagation()} 
@@ -655,7 +981,6 @@ export default function App() {
 
       {/* 5. Right Sidebar (Filters) */}
       <div className={`absolute top-40 right-4 w-64 bg-white/60 backdrop-blur-md rounded-2xl shadow-xl border border-slate-200 z-40 p-5 transition-all duration-300 origin-top-right ${rightPanelOpen ? 'opacity-100 scale-100' : 'opacity-0 scale-95 pointer-events-none'}`}>
-         {/* ... (Todo igual que antes) ... */}
          <div className="flex justify-between items-center mb-4">
            <h3 className="font-bold text-sm text-slate-800 flex items-center gap-2">
              <Settings className="w-4 h-4" /> Map Controls
@@ -701,8 +1026,11 @@ export default function App() {
       </div>
 
       {/* 6. Bottom Confidence Filter */}
-      <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 z-50 w-full max-w-md flex justify-center px-4">
+      <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 z-50 w-full max-w-md flex justify-center items-center gap-3 px-4">
         <ConfidenceFilter value={minConfidence} onChange={setMinConfidence} />
+        {isRecomputing && (
+          <div className="animate-spin w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full" title="Recomputing coverage..." />
+        )}
       </div>
 
       {/* 7. Layer Controls */}

@@ -51,64 +51,311 @@ L.Icon.Default.mergeOptions({
 
 // --- HELPER COMPONENTS ---
 
-// 1. WELCOME MODAL
+// 1. WELCOME MODAL (Multi-step onboarding)
 const WelcomeModal = ({ onClose }) => {
+  const [step, setStep] = useState(0);
+  
+  const steps = [
+    // Step 0: Welcome & Value Proposition
+    {
+      title: "Welcome to GeoCare",
+      content: (
+        <div className="space-y-6">
+          <p className="text-slate-600 text-lg leading-relaxed">
+            Map healthcare services using <span className="font-semibold text-blue-600">natural language queries</span>, 
+            with intelligent ranking based on distance and service fit.
+          </p>
+          
+          <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-2xl p-5 border border-blue-100">
+            <h4 className="font-semibold text-slate-800 mb-3 flex items-center gap-2">
+              <Users className="w-4 h-4 text-blue-600" />
+              Built for
+            </h4>
+            <div className="flex flex-wrap gap-2">
+              {["NGO Workers", "Health Planners", "Policy Makers", "Healthcare Users", "Field Workers"].map((audience) => (
+                <span key={audience} className="px-3 py-1.5 bg-white rounded-full text-xs font-medium text-slate-700 shadow-sm border border-slate-100">
+                  {audience}
+                </span>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="bg-emerald-50 rounded-xl p-4 border border-emerald-100">
+              <div className="text-2xl font-bold text-emerald-600 mb-1">NLP</div>
+              <p className="text-xs text-slate-600">Natural language queries converted to fast SQL</p>
+            </div>
+            <div className="bg-amber-50 rounded-xl p-4 border border-amber-100">
+              <div className="text-2xl font-bold text-amber-600 mb-1">AI</div>
+              <p className="text-xs text-slate-600">LLM-powered service matching refinement</p>
+            </div>
+          </div>
+        </div>
+      )
+    },
+    // Step 1: How to Search
+    {
+      title: "Ask in Plain Language",
+      content: (
+        <div className="space-y-5">
+          <p className="text-slate-600 leading-relaxed">
+            Simply type what you're looking for. Our AI converts your query into optimized searches.
+          </p>
+          
+          <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200">
+            <div className="flex items-center gap-2 mb-3">
+              <Search className="w-4 h-4 text-blue-500" />
+              <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Example Queries</span>
+            </div>
+            <div className="space-y-2">
+              {[
+                "Hospitals with emergency services near Accra",
+                "Clinics offering maternal care in rural areas",
+                "Facilities with X-ray equipment within 50km"
+              ].map((query, i) => (
+                <div key={i} className="bg-white rounded-lg px-3 py-2 text-sm text-slate-700 border border-slate-100 italic">
+                  "{query}"
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex items-start gap-3 bg-blue-50 rounded-xl p-4 border border-blue-100">
+            <Info className="w-5 h-5 text-blue-500 shrink-0 mt-0.5" />
+            <p className="text-sm text-slate-600">
+              <span className="font-semibold text-slate-800">Fast & Efficient:</span> Structured queries use SQL for speed, while LLMs refine free-text fields for accuracy.
+            </p>
+          </div>
+        </div>
+      )
+    },
+    // Step 2: Understanding the Star Rating
+    {
+      title: "Service Match Index",
+      content: (
+        <div className="space-y-4">
+          <p className="text-slate-600 leading-relaxed">
+            Each facility receives a <span className="font-semibold">1-5 star rating</span> based on how well it matches your specific needs.
+          </p>
+          
+          <div className="space-y-2">
+            {[
+              { stars: 1, color: "red", desc: "Any healthcare service in the area" },
+              { stars: 2, color: "orange", desc: "Passes initial SQL query filtering" },
+              { stars: 3, color: "yellow", desc: "Free-text fields loosely match your needs" },
+              { stars: 4, color: "lime", desc: "Good match between facility & your query" },
+              { stars: 5, color: "green", desc: "Exact service explicitly mentioned" },
+            ].map(({ stars, color, desc }) => (
+              <div key={stars} className="flex items-center gap-3 bg-slate-50 rounded-xl px-4 py-3 border border-slate-100">
+                <div className="flex gap-0.5 shrink-0">
+                  {[...Array(5)].map((_, i) => (
+                    <Star 
+                      key={i} 
+                      className={`w-4 h-4 ${i < stars ? `fill-${color}-400 text-${color}-400` : 'text-slate-200'}`}
+                      style={{ fill: i < stars ? (color === 'red' ? '#f87171' : color === 'orange' ? '#fb923c' : color === 'yellow' ? '#facc15' : color === 'lime' ? '#a3e635' : '#4ade80') : 'transparent' }}
+                    />
+                  ))}
+                </div>
+                <span className="text-sm text-slate-700">{desc}</span>
+              </div>
+            ))}
+          </div>
+
+          <p className="text-xs text-slate-500 bg-slate-50 rounded-lg p-3 border border-slate-100">
+            Use the <span className="font-semibold">star filter at the bottom</span> of the screen to show only facilities meeting your minimum quality threshold.
+          </p>
+        </div>
+      )
+    },
+    // Step 3: Access Index & Coverage
+    {
+      title: "Access & Coverage",
+      content: (
+        <div className="space-y-5">
+          <div className="bg-gradient-to-br from-emerald-50 to-teal-50 rounded-2xl p-5 border border-emerald-100">
+            <h4 className="font-semibold text-slate-800 mb-2">Combined Access Index</h4>
+            <p className="text-sm text-slate-600 mb-3">
+              A single score combining <span className="font-medium text-emerald-700">distance</span> and <span className="font-medium text-emerald-700">service match</span> quality.
+            </p>
+            <div className="flex gap-2 items-center text-xs">
+              <span className="px-2 py-1 bg-white rounded-md font-mono border border-slate-200">Distance Quality</span>
+              <span className="text-slate-400">×</span>
+              <span className="px-2 py-1 bg-white rounded-md font-mono border border-slate-200">Match Index</span>
+              <span className="text-slate-400">=</span>
+              <span className="px-2 py-1 bg-emerald-100 rounded-md font-mono font-semibold text-emerald-700 border border-emerald-200">Access Score</span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="bg-purple-50 rounded-xl p-4 border border-purple-100">
+              <Users className="w-5 h-5 text-purple-500 mb-2" />
+              <h5 className="font-semibold text-slate-800 text-sm mb-1">Population Data</h5>
+              <p className="text-xs text-slate-600">1km × 1km WorldPop grid integration</p>
+            </div>
+            <div className="bg-rose-50 rounded-xl p-4 border border-rose-100">
+              <MapPin className="w-5 h-5 text-rose-500 mb-2" />
+              <h5 className="font-semibold text-slate-800 text-sm mb-1">Healthcare Deserts</h5>
+              <p className="text-xs text-slate-600">Identify underserved areas instantly</p>
+            </div>
+          </div>
+
+          <div className="flex items-start gap-3 bg-amber-50 rounded-xl p-4 border border-amber-100">
+            <Activity className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+            <p className="text-sm text-slate-600">
+              <span className="font-semibold text-slate-800">Impact Assessment:</span> Calculate population coverage to quantify service gaps and project reach.
+            </p>
+          </div>
+        </div>
+      )
+    },
+    // Step 4: Quick Start Guide
+    {
+      title: "Quick Start",
+      content: (
+        <div className="space-y-4">
+          <p className="text-slate-600 leading-relaxed">
+            You're ready to explore! Here's a quick reference:
+          </p>
+          
+          <div className="space-y-3">
+            <div className="flex items-start gap-3">
+              <div className="w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center shrink-0">
+                <Search className="w-4 h-4 text-blue-600" />
+              </div>
+              <div>
+                <h4 className="font-semibold text-slate-800 text-sm">Search Bar</h4>
+                <p className="text-xs text-slate-500">Type natural language queries to find healthcare facilities</p>
+              </div>
+            </div>
+            
+            <div className="flex items-start gap-3">
+              <div className="w-8 h-8 bg-purple-100 rounded-lg flex items-center justify-center shrink-0">
+                <Pencil className="w-4 h-4 text-purple-600" />
+              </div>
+              <div>
+                <h4 className="font-semibold text-slate-800 text-sm">Area Selection</h4>
+                <p className="text-xs text-slate-500">Draw polygons to define your region of interest</p>
+              </div>
+            </div>
+
+            <div className="flex items-start gap-3">
+              <div className="w-8 h-8 bg-amber-100 rounded-lg flex items-center justify-center shrink-0">
+                <Star className="w-4 h-4 text-amber-600" />
+              </div>
+              <div>
+                <h4 className="font-semibold text-slate-800 text-sm">Star Filter</h4>
+                <p className="text-xs text-slate-500">Adjust minimum service match quality (bottom bar)</p>
+              </div>
+            </div>
+
+            <div className="flex items-start gap-3">
+              <div className="w-8 h-8 bg-emerald-100 rounded-lg flex items-center justify-center shrink-0">
+                <Layers className="w-4 h-4 text-emerald-600" />
+              </div>
+              <div>
+                <h4 className="font-semibold text-slate-800 text-sm">Coverage Modes</h4>
+                <p className="text-xs text-slate-500">Toggle between buffer zones and H3 hexagons visualization</p>
+              </div>
+            </div>
+
+            <div className="flex items-start gap-3">
+              <div className="w-8 h-8 bg-violet-100 rounded-lg flex items-center justify-center shrink-0">
+                <Users className="w-4 h-4 text-violet-600" />
+              </div>
+              <div>
+                <h4 className="font-semibold text-slate-800 text-sm">Population Overlay</h4>
+                <p className="text-xs text-slate-500">Visualize population density to identify underserved areas</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )
+    }
+  ];
+
+  const currentStep = steps[step];
+  const isLastStep = step === steps.length - 1;
+  const isFirstStep = step === 0;
+
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-in fade-in duration-300">
-      <div className="bg-white rounded-3xl shadow-2xl max-w-lg w-full p-8 relative overflow-hidden">
-        <div className="absolute top-0 right-0 w-32 h-32 bg-blue-100 rounded-bl-full -mr-8 -mt-8 opacity-50 pointer-events-none"></div>
-        <div className="relative z-10">
-          <div className="w-12 h-12 flex items-center justify-center mb-6">
-            <img src="/favicon.png" alt="GeoCare Logo" className="h-8 w-auto" />
+      <div className="bg-white rounded-3xl shadow-2xl max-w-lg w-full relative overflow-hidden">
+        {/* Decorative elements */}
+        <div className="absolute top-0 right-0 w-40 h-40 bg-gradient-to-br from-blue-100 to-indigo-100 rounded-bl-full -mr-12 -mt-12 opacity-60 pointer-events-none"></div>
+        <div className="absolute bottom-0 left-0 w-24 h-24 bg-gradient-to-tr from-emerald-100 to-teal-100 rounded-tr-full -ml-8 -mb-8 opacity-40 pointer-events-none"></div>
+        
+        {/* Progress bar */}
+        <div className="h-1 bg-slate-100">
+          <div 
+            className="h-full bg-gradient-to-r from-blue-500 to-indigo-500 transition-all duration-500"
+            style={{ width: `${((step + 1) / steps.length) * 100}%` }}
+          />
+        </div>
+
+        <div className="relative z-10 p-8">
+          {/* Header */}
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 flex items-center justify-center">
+                <img src="/favicon.png" alt="GeoCare Logo" className="h-8 w-auto" />
+              </div>
+              <div>
+                <h2 className="text-xl font-bold text-slate-900">{currentStep.title}</h2>
+                <p className="text-xs text-slate-400">Step {step + 1} of {steps.length}</p>
+              </div>
+            </div>
+            <button 
+              onClick={onClose}
+              className="p-2 hover:bg-slate-100 rounded-full transition-colors text-slate-400 hover:text-slate-600"
+              title="Skip tutorial"
+            >
+              <X className="w-5 h-5" />
+            </button>
           </div>
-          <h2 className="text-3xl font-bold text-slate-900 mb-3">Welcome to GeoCare</h2>
-          <p className="text-slate-600 text-lg mb-6 leading-relaxed">
-            Explore and ask about healthcare facilities with our interactive AI mapping tool.
-          </p>
-          <div className="space-y-4 mb-8">
-            <div className="flex items-start gap-3">
-              <div className="p-2 bg-slate-50 rounded-lg border border-slate-100">
-                <Search className="w-4 h-4 text-blue-500" />
-              </div>
-              <div>
-                <h4 className="font-semibold text-slate-800">Search bar</h4>
-                <p className="text-sm text-slate-500">Ask question related to healthcare facilities and nearby locations.</p>
-              </div>
-            </div>
-            <div className="flex items-start gap-3">
-              <div className="p-2 bg-slate-50 rounded-lg border border-slate-100">
-                <Pencil className="w-4 h-4 text-purple-500" />
-              </div>
-              <div>
-                <h4 className="font-semibold text-slate-800">Select Areas</h4>
-                <p className="text-sm text-slate-500">Draw and select specific zones on the map.</p>
-              </div>
-            </div>
-            <div className="flex items-start gap-3">
-              <div className="p-2 bg-slate-50 rounded-lg border border-slate-100">
-                <Star className="w-4 h-4 text-green-500" />
-              </div>
-              <div>
-                <h4 className="font-semibold text-slate-800">Filter Results</h4>
-                <p className="text-sm text-slate-500">Use the confidence rating system at the bottom to filter.</p>
-              </div>
-            </div>
-            <div className="flex items-start gap-3">
-              <div className="p-2 bg-slate-50 rounded-lg border border-slate-100">
-                <MapPin className="w-4 h-4 text-red-500" />
-              </div>
-              <div>
-                <h4 className="font-semibold text-slate-800">Select Points</h4>
-                <p className="text-sm text-slate-500">Click on the map to select exact point locations.</p>
-              </div>
-            </div>
+
+          {/* Content */}
+          <div className="min-h-[320px] mb-6">
+            {currentStep.content}
           </div>
-          <button
-            onClick={onClose}
-            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl transition-all shadow-lg shadow-blue-600/20 active:scale-[0.98]"
-          >
-            Start
-          </button>
+
+          {/* Navigation */}
+          <div className="flex items-center justify-between gap-3">
+            <button
+              onClick={() => setStep(s => s - 1)}
+              disabled={isFirstStep}
+              className={`px-5 py-3 rounded-xl font-semibold text-sm transition-all ${
+                isFirstStep 
+                  ? 'text-slate-300 cursor-not-allowed' 
+                  : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              Back
+            </button>
+
+            {/* Step indicators */}
+            <div className="flex gap-1.5">
+              {steps.map((_, i) => (
+                <button
+                  key={i}
+                  onClick={() => setStep(i)}
+                  className={`w-2 h-2 rounded-full transition-all ${
+                    i === step 
+                      ? 'bg-blue-600 w-6' 
+                      : i < step 
+                        ? 'bg-blue-300' 
+                        : 'bg-slate-200'
+                  }`}
+                />
+              ))}
+            </div>
+
+            <button
+              onClick={isLastStep ? onClose : () => setStep(s => s + 1)}
+              className="px-5 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm rounded-xl transition-all shadow-lg shadow-blue-600/20 active:scale-[0.98]"
+            >
+              {isLastStep ? 'Start Exploring' : 'Next'}
+            </button>
+          </div>
         </div>
       </div>
     </div>

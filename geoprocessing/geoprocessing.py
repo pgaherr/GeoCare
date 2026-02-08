@@ -15,11 +15,12 @@ from typing import Callable, Tuple, Optional
 import numpy as np
 import pandas as pd
 import geopandas as gpd
+import os 
 
 import quality_utils
 import isochrones
 import h3_utils
-
+import population
 
 # Number of discrete accessibility grades (0–1)
 n_accessibility_grades: int = 10
@@ -192,48 +193,39 @@ def get_quality_matrix(
 
     return quality_matrix
 
+def get_pop_h3(aoi,results_path,h3_pop_resolution = 8):
+    pop_h3_path = results_path+f"/population_h3_res_{h3_pop_resolution}.csv"
+    if os.path.isfile(pop_h3_path):
+        pop_h3_df = pd.read_csv(pop_h3_path)
+    else:
+        population_file = population.download_worldpop_population(
+            aoi,
+            2025,
+            folder=results_path,
+            resolution="1km",
+        )
+        pop_h3_df = h3_utils.from_raster(population_file,aoi=aoi,resolution=h3_pop_resolution,method="distribute")
+        pop_h3_df = pop_h3_df.rename(columns={'value':'population'})
+        pop_h3_df.reset_index().to_csv(pop_h3_path)
 
-def coverage_quality(
-    data: gpd.GeoDataFrame,
-    service_quality_func: Callable[[float], float],
-    quality_func: Callable[[float, float], float],
-    reference_distance: float,
+    pop_h3_df = pd.read_csv(pop_h3_path).set_index("h3_cell")
+    return pop_h3_df 
+
+
+def coverage(
+    data,
+    elasticity: float, 
+    reference_distance: float, 
     max_distance: float,
-    do_population: bool = True,
-    do_h3: bool = True,
-    h3_resolution: int = 8,
-    pop_h3: Optional[pd.DataFrame] = None,
+    pop_h3 = None,
+    h3_resolution = None
 ):
-    """
-    Compute spatial accessibility and optional H3 / population aggregation.
-
-    Parameters
-    ----------
-    data : GeoDataFrame
-        Input services with geometry and 'stars'
-    service_quality_func : Callable
-        Maps stars → service quality
-    quality_func : Callable
-        Combined quality function
-    reference_distance : float
-    max_distance : float
-    do_population : bool
-        Whether to aggregate with population
-    do_h3 : bool
-        Whether to aggregate to H3
-    h3_resolution : int
-        H3 resolution
-    pop_h3 : pd.DataFrame, optional
-        Population indexed by H3 cell
-
-    Returns
-    -------
-    tuple
-        Depending on flags, returns iso_df, iso_df_h3, iso_df_h3_pop
-    """
+    service_quality_func = get_service_quality_func()
+    distance_quality_func = get_distance_quality_func(elasticity,reference_distance,max_distance)
+    quality_func = get_quality_func(service_quality_func,distance_quality_func)
+    
     data = data.copy()
     data["service_quality"] = data["stars"].map(service_quality_func).round(3)
-
     _, distance_grid = get_grids(quality_func, reference_distance, max_distance)
     quality_matrix = get_quality_matrix(data, quality_func, distance_grid)
 
@@ -243,6 +235,14 @@ def coverage_quality(
 
     iso_df_h3 = None
     iso_df_h3_pop = None
+
+    do_h3 = True 
+    if h3_resolution is None:
+        do_h3 = False 
+
+    do_population = True 
+    if pop_h3 is None:
+        do_population = False 
 
     if do_h3:
         iso_df_h3 = h3_utils.from_gdf(
@@ -257,6 +257,9 @@ def coverage_quality(
         iso_df_h3_pop = pop_h3.merge(
             iso_df_h3, left_index=True, right_index=True, how="left"
         )
+        iso_df_h3_pop = iso_df_h3_pop[iso_df_h3_pop['population'] > 1]
+        iso_df_h3_pop = h3_utils.to_gdf(iso_df_h3_pop)
+        iso_df_h3_pop.geometry = iso_df_h3_pop.geometry.centroid
 
     if do_h3 and do_population:
         return iso_df, iso_df_h3, iso_df_h3_pop

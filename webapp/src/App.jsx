@@ -21,7 +21,10 @@ import {
   ChevronLeft,
   Clock,
   Activity,
-  Database
+  Database,
+  Info,
+  Pencil,
+  Star,
 } from "lucide-react";
 import "leaflet/dist/leaflet.css";
 import "leaflet-draw/dist/leaflet.draw.css";
@@ -36,10 +39,88 @@ L.Icon.Default.mergeOptions({
 
 // --- HELPER COMPONENTS ---
 
-// 1. Star Rating Filter (Bottom Center)
+// 1. WELCOME MODAL (Your GeoCare Version)
+const WelcomeModal = ({ onClose }) => {
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-in fade-in duration-300">
+      <div className="bg-white rounded-3xl shadow-2xl max-w-lg w-full p-8 relative overflow-hidden">
+        
+        {/* Decorative background */}
+        <div className="absolute top-0 right-0 w-32 h-32 bg-blue-100 rounded-bl-full -mr-8 -mt-8 opacity-50 pointer-events-none"></div>
+
+        <div className="relative z-10">
+          <div className="w-12 h-12 flex items-center justify-center mb-6">
+            <img src="/favicon.png" alt="GeoCare Logo" className="h-8 w-auto" />
+          </div>
+          
+          <h2 className="text-3xl font-bold text-slate-900 mb-3">
+            Welcome to GeoCare
+          </h2>
+          
+          <p className="text-slate-600 text-lg mb-6 leading-relaxed">
+            Explore and ask about healthcare facilities with our interactive AI mapping tool.
+          </p>
+
+          <div className="space-y-4 mb-8">
+            <div className="flex items-start gap-3">
+              <div className="p-2 bg-slate-50 rounded-lg border border-slate-100">
+                <Search className="w-4 h-4 text-blue-500" />
+              </div>
+              <div>
+                <h4 className="font-semibold text-slate-800">Search bar</h4>
+                <p className="text-sm text-slate-500">Ask question related to healthcare facilities and nearby locations.</p>
+              </div>
+            </div>
+            
+            <div className="flex items-start gap-3">
+              <div className="p-2 bg-slate-50 rounded-lg border border-slate-100">
+                <Pencil className="w-4 h-4 text-purple-500" />
+              </div>
+              <div>
+                <h4 className="font-semibold text-slate-800">Select Areas</h4>
+                <p className="text-sm text-slate-500">Draw and select specific zones on the map.</p>
+              </div>
+            </div>
+
+            <div className="flex items-start gap-3">
+              <div className="p-2 bg-slate-50 rounded-lg border border-slate-100">
+                <Star className="w-4 h-4 text-green-500" />
+              </div>
+              <div>
+                <h4 className="font-semibold text-slate-800">Filter Results</h4>
+                <p className="text-sm text-slate-500">Use the confidence rating system at the bottom to filter.</p>
+              </div>
+            </div>
+
+            <div className="flex items-start gap-3">
+              <div className="p-2 bg-slate-50 rounded-lg border border-slate-100">
+                <MapPin className="w-4 h-4 text-red-500" />
+              </div>
+              <div>
+                <h4 className="font-semibold text-slate-800">Select Points</h4>
+                <p className="text-sm text-slate-500">Click on the map to select exact point locations.</p>
+              </div>
+            </div>
+
+            
+          </div>
+
+          <button
+            onClick={onClose}
+            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl transition-all shadow-lg shadow-blue-600/20 active:scale-[0.98]"
+          >
+            Start
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// 2. Star Rating Filter (Bottom Center)
 const ConfidenceFilter = ({ value, onChange }) => {
   return (
-    <div className="bg-white/90 backdrop-blur-md border border-slate-200 shadow-xl rounded-[20px] px-6 py-3 flex items-center gap-4 animate-in slide-in-from-bottom-10 duration-500">
+    <div className="bg-white/60 backdrop-blur-md border border-slate-200 shadow-xl rounded-[20px] px-6 py-3 flex items-center gap-4 animate-in slide-in-from-bottom-10 duration-500">
       <span className="text-xs font-bold uppercase tracking-wider text-slate-500 hidden sm:block">
         Confidence Threshold
       </span>
@@ -72,13 +153,13 @@ const ConfidenceFilter = ({ value, onChange }) => {
         ))}
       </div>
       <div className="text-sm font-medium text-slate-700 min-w-[3rem] text-right">
-        {value === 1 ? "All" : `${value}+ Stars`}
+        {value === 1 ? "All" : `${value} Stars`}
       </div>
     </div>
   );
 };
 
-// 2. Map Controller
+// 3. Map Controller
 function RecenterMap({ lat, lon }) {
   const map = useMap();
   useEffect(() => {
@@ -92,10 +173,14 @@ function RecenterMap({ lat, lon }) {
 // --- MAIN APP ---
 
 export default function UrbanLayoutApp() {
+  // Welcome Modal State
+  const [showWelcome, setShowWelcome] = useState(true);
+
   // UI State
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
   const [showLayers, setShowLayers] = useState(false);
+  const [mapLayer, setMapLayer] = useState('standard');
   
   // Data State
   const [query, setQuery] = useState("");
@@ -139,6 +224,9 @@ export default function UrbanLayoutApp() {
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-slate-900 font-sans text-slate-900">
       
+      {/* Welcome Modal */}
+      {showWelcome && <WelcomeModal onClose={() => setShowWelcome(false)} />}
+      
       {/* =========================================
           4. MAIN CONTENT AREA (The Map)
           Z-Index: 0 (Base Layer)
@@ -152,8 +240,8 @@ export default function UrbanLayoutApp() {
         >
           {/* Tile Layer */}
           <TileLayer
-            attribution='&copy; OSM'
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+            attribution={mapLayer === 'satellite' ? '&copy; OpenTopoMap' : mapLayer === 'dark' ? '&copy; CartoDB' : '&copy; OSM'}
+            url={mapLayer === 'standard' ? 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png' : mapLayer === 'light' ? 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png' : mapLayer === 'dark' ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png' : 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png'}
           />
           
           <RecenterMap lat={mapPosition[0]} lon={mapPosition[1]} />
@@ -175,20 +263,7 @@ export default function UrbanLayoutApp() {
             </Marker>
           ))}
 
-          {/* Area Selection Support */}
-          <FeatureGroup>
-            <EditControl
-              position="topright"
-              draw={{
-                rectangle: true,
-                polygon: { allowIntersection: false, showArea: true },
-                circle: false,
-                circlemarker: false,
-                marker: false,
-                polyline: false,
-              }}
-            />
-          </FeatureGroup>
+          
         </MapContainer>
       </div>
 
@@ -221,7 +296,7 @@ export default function UrbanLayoutApp() {
                <input 
                  type="text" 
                  placeholder="Search for healthcare nearby locations..." 
-                 className="w-full pl-5 pr-12 py-3.5 bg-white/95 backdrop-blur rounded-2xl border-0 shadow-sm focus:ring-2 focus:ring-blue-500 outline-none text-slate-800 placeholder:text-slate-400"
+                 className="w-full pl-5 pr-12 py-3.5 bg-white/70 backdrop-blur rounded-2xl border-0 shadow-sm focus:ring-2 focus:ring-blue-500 outline-none text-slate-800 placeholder:text-slate-400"
                  value={query}
                  onChange={(e) => setQuery(e.target.value)}
                />
@@ -256,7 +331,7 @@ export default function UrbanLayoutApp() {
           Z-Index: 40
       ========================================= */}
       <div 
-        className={`absolute top-0 left-0 h-full w-80 bg-white/95 backdrop-blur-md shadow-2xl z-40 transform transition-transform duration-300 pt-24 border-r border-slate-200 flex flex-col ${
+        className={`absolute top-0 left-0 h-full w-80 bg-white/60 backdrop-blur-md shadow-2xl z-40 transform transition-transform duration-300 pt-24 border-r border-slate-200 flex flex-col ${
           sidebarOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
@@ -306,7 +381,7 @@ export default function UrbanLayoutApp() {
           5. RIGHT-SIDE OVERLAY (Map Filters)
           Z-Index: 40
       ========================================= */}
-      <div className={`absolute top-40 right-4 w-64 bg-white/90 backdrop-blur-md rounded-2xl shadow-xl border border-slate-200 z-40 p-5 transition-all duration-300 origin-top-right ${rightPanelOpen ? 'opacity-100 scale-100' : 'opacity-0 scale-95 pointer-events-none'}`}>
+      <div className={`absolute top-40 right-4 w-64 bg-white/60 backdrop-blur-md rounded-2xl shadow-xl border border-slate-200 z-40 p-5 transition-all duration-300 origin-top-right ${rightPanelOpen ? 'opacity-100 scale-100' : 'opacity-0 scale-95 pointer-events-none'}`}>
          <div className="flex justify-between items-center mb-4">
            <h3 className="font-bold text-sm text-slate-800 flex items-center gap-2">
              <Settings className="w-4 h-4" /> Map Controls
@@ -383,7 +458,7 @@ export default function UrbanLayoutApp() {
           7. LAYERS CONTROL (Bottom Right)
           Z-Index: 50
       ========================================= */}
-      <div className={`absolute bottom-8 right-4 z-50 flex flex-col transition-all duration-300 ${showLayers ? 'gap-12' : 'gap-3'}`}>
+      <div className={`absolute bottom-8 right-4 z-50 flex flex-col transition-all duration-300 ${showLayers ? 'gap-44' : 'gap-3'}`}>
          {/* Toggle for the Right Panel (if closed) */}
          {!rightPanelOpen && (
            <button 
@@ -399,14 +474,17 @@ export default function UrbanLayoutApp() {
          <div className="relative">
             {showLayers && (
               <div className="absolute bottom-full right-0 mb-3 w-40 bg-white rounded-xl shadow-xl border border-slate-200 p-2 animate-in fade-in slide-in-from-bottom-2">
-                <button className="w-full text-left px-3 py-2 text-sm hover:bg-slate-50 rounded-lg text-blue-600 font-medium bg-blue-50">
+                <button onClick={() => { setMapLayer('standard'); setShowLayers(false); }} className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-50 rounded-lg font-medium ${mapLayer === 'standard' ? 'text-blue-600 bg-blue-50' : 'text-slate-600'}`}>
                    Standard
                 </button>
-                <button className="w-full text-left px-3 py-2 text-sm hover:bg-slate-50 rounded-lg text-slate-600">
-                   Satellite
+                <button onClick={() => { setMapLayer('light'); setShowLayers(false); }} className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-50 rounded-lg font-medium ${mapLayer === 'light' ? 'text-blue-600 bg-blue-50' : 'text-slate-600'}`}>
+                   Light
                 </button>
-                <button className="w-full text-left px-3 py-2 text-sm hover:bg-slate-50 rounded-lg text-slate-600">
-                   Dark Mode
+                <button onClick={() => { setMapLayer('dark'); setShowLayers(false); }} className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-50 rounded-lg font-medium ${mapLayer === 'dark' ? 'text-blue-600 bg-blue-50' : 'text-slate-600'}`}>
+                   Dark
+                </button>
+                <button onClick={() => { setMapLayer('satellite'); setShowLayers(false); }} className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-50 rounded-lg font-medium ${mapLayer === 'satellite' ? 'text-blue-600 bg-blue-50' : 'text-slate-600'}`}>
+                   Satellite
                 </button>
               </div>
             )}

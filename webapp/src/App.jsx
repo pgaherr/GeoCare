@@ -23,7 +23,6 @@ import {
   Clock,
   Activity,
   Database,
-  Info,
   Pencil,
   Star,
   Users,
@@ -41,6 +40,9 @@ L.Icon.Default.mergeOptions({
   iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
   shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
 });
+
+const DEFAULT_MAX_DISTANCE = 80000;
+const DEFAULT_ELASTICITY = 0.1;
 
 // --- HELPER COMPONENTS ---
 
@@ -193,9 +195,13 @@ export default function UrbanLayoutApp() {
   const [minConfidence, setMinConfidence] = useState(1); // 1 = Show All
   const [mapPosition, setMapPosition] = useState([7.983173013737491, -1.0916666895576415]); // Ghana
 
-  // Mock Filter States (Right Panel)
-  const [timeRange, setTimeRange] = useState(50);
-  const [popularity, setPopularity] = useState(true);
+  // Coverage parameters (used to recompute isochrone/H3 accessibility layers)
+  const [maxDistance, setMaxDistance] = useState(DEFAULT_MAX_DISTANCE);
+  const [elasticity, setElasticity] = useState(DEFAULT_ELASTICITY);
+  const [baseCoverageParams, setBaseCoverageParams] = useState({
+    maxDistance: DEFAULT_MAX_DISTANCE,
+    elasticity: DEFAULT_ELASTICITY,
+  });
 
   // Loading State
   const [isSearching, setIsSearching] = useState(false);
@@ -270,11 +276,14 @@ export default function UrbanLayoutApp() {
   
   // Desert style - brown fill for healthcare "deserts" (uncovered areas)
   const getAoiStyle = () => ({
-    fillColor: '#8B4513',  // SaddleBrown
-    fillOpacity: 0.55,
-    weight: 0,
-    color: 'transparent',
-    opacity: 0,
+    // Softer "sand" tone so the desert context is visible but not overwhelming.
+    fillColor: '#B38A57',
+    fillOpacity: 0.26,
+    weight: 1,
+    color: '#8E6B43',
+    opacity: 0.35,
+    lineJoin: 'round',
+    lineCap: 'round',
   });
 
   // Isochrone style function - color by accessibility
@@ -397,7 +406,11 @@ export default function UrbanLayoutApp() {
       const res = await fetch("http://localhost:8000/search/pipeline", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: query.trim() }),
+        body: JSON.stringify({
+          query: query.trim(),
+          max_distance: maxDistance,
+          elasticity,
+        }),
       });
       
       if (!res.ok) {
@@ -422,6 +435,15 @@ export default function UrbanLayoutApp() {
         setOrigH3AccessibilityLayer(data.layers.h3_accessibility);
       }
       if (data.layers?.h3_population) setH3PopulationLayer(data.layers.h3_population);
+
+      const cfgMaxDistance = Number(data.config?.max_distance ?? maxDistance);
+      const cfgElasticity = Number(data.config?.elasticity ?? elasticity);
+      setBaseCoverageParams({
+        maxDistance: cfgMaxDistance,
+        elasticity: cfgElasticity,
+      });
+      setMaxDistance(cfgMaxDistance);
+      setElasticity(cfgElasticity);
 
       // Reset star filter to "All" on new search
       setMinConfidence(1);
@@ -454,43 +476,155 @@ export default function UrbanLayoutApp() {
     }
   };
 
-  // Recompute coverage when star filter changes
+  // Recompute coverage when the star filter or coverage parameters change
   useEffect(() => {
-    // minConfidence===1 means "show all" — restore original layers
-    if (minConfidence === 1) {
-      if (origIsochronesLayer) setIsochronesLayer(origIsochronesLayer);
-      if (origH3AccessibilityLayer) setH3AccessibilityLayer(origH3AccessibilityLayer);
-      return;
-    }
-    // No facilities loaded yet — nothing to recompute
     if (!facilitiesLayer) return;
 
+    const isAtBaseParams =
+      maxDistance === baseCoverageParams.maxDistance &&
+      Math.abs(elasticity - baseCoverageParams.elasticity) < 1e-9;
+
+    // If we're back to the base query config and no star filtering, restore original layers.
+    if (minConfidence === 1 && isAtBaseParams) {
+      if (origIsochronesLayer) setIsochronesLayer(origIsochronesLayer);
+      if (origH3AccessibilityLayer) setH3AccessibilityLayer(origH3AccessibilityLayer);
+      setIsRecomputing(false);
+      return;
+    }
+
     let cancelled = false;
-    setIsRecomputing(true);
+    const timer = setTimeout(() => {
+      setIsRecomputing(true);
 
-    fetch("http://localhost:8000/coverage/recompute", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ min_stars: minConfidence }),
-    })
-      .then((res) => res.json())
-      .then((data) => {
-        if (cancelled) return;
-        if (data.layers?.isochrones) setIsochronesLayer(data.layers.isochrones);
-        else setIsochronesLayer(null);
-        if (data.layers?.h3_accessibility) setH3AccessibilityLayer(data.layers.h3_accessibility);
-        else setH3AccessibilityLayer(null);
+      fetch("http://localhost:8000/coverage/recompute", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          min_stars: minConfidence,
+          max_distance: maxDistance,
+          elasticity,
+        }),
       })
-      .catch((err) => console.error("Recompute failed:", err))
-      .finally(() => { if (!cancelled) setIsRecomputing(false); });
+        .then((res) => res.json())
+        .then((data) => {
+          if (cancelled) return;
+          if (data.layers?.isochrones) setIsochronesLayer(data.layers.isochrones);
+          else setIsochronesLayer(null);
+          if (data.layers?.h3_accessibility) setH3AccessibilityLayer(data.layers.h3_accessibility);
+          else setH3AccessibilityLayer(null);
+        })
+        .catch((err) => console.error("Recompute failed:", err))
+        .finally(() => { if (!cancelled) setIsRecomputing(false); });
+    }, 250);
 
-    return () => { cancelled = true; };
-  }, [minConfidence]);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [
+    minConfidence,
+    maxDistance,
+    elasticity,
+    facilitiesLayer,
+    origIsochronesLayer,
+    origH3AccessibilityLayer,
+    baseCoverageParams.maxDistance,
+    baseCoverageParams.elasticity,
+  ]);
 
   // Filter Results based on Confidence Selector
   const filteredResults = useMemo(() => {
     return results.filter(r => r.confidenceScore >= minConfidence);
   }, [results, minConfidence]);
+
+  // Population coverage stats by accessibility step (0.0 .. 1.0)
+  const coveragePopulationStats = useMemo(() => {
+    const popFeatures = h3PopulationLayer?.features || [];
+    if (!popFeatures.length) {
+      return {
+        hasData: false,
+        totalPopulation: 0,
+        coveredPopulation: 0,
+        weightedAccessibility: 0,
+        rows: [],
+      };
+    }
+
+    const getCellKey = (feature) => {
+      const key = feature?.properties?.h3_cell ?? feature?.id;
+      if (key === undefined || key === null) return null;
+      return String(key);
+    };
+
+    const accessibilityByCell = new Map();
+    for (const feature of h3AccessibilityLayer?.features || []) {
+      const cell = getCellKey(feature);
+      if (!cell) continue;
+      const accessibility = Number(feature.properties?.accessibility);
+      if (!Number.isFinite(accessibility)) continue;
+      const clamped = Math.max(0, Math.min(1, accessibility));
+      accessibilityByCell.set(cell, clamped);
+    }
+
+    const stepsAsc = Array.from({ length: 11 }, (_, idx) => (idx / 10).toFixed(1));
+    const stepPopulation = new Map(stepsAsc.map((step) => [step, 0]));
+
+    // Tolerance for high-accessibility buckets: helps avoid undercounting
+    // near-threshold cells caused by discretization and H3 boundary effects.
+    const getToleratedAccessibilityForStep = (value) => {
+      if (!Number.isFinite(value)) return 0;
+      const clamped = Math.max(0, Math.min(1, value));
+      if (clamped >= 0.55) {
+        return Math.min(1, clamped + 0.08);
+      }
+      return clamped;
+    };
+
+    let totalPopulation = 0;
+    let coveredPopulation = 0;
+    let weightedAccessibilitySum = 0;
+
+    for (const feature of popFeatures) {
+      const population = Number(feature.properties?.population) || 0;
+      if (!Number.isFinite(population) || population <= 0) continue;
+
+      totalPopulation += population;
+
+      const cell = getCellKey(feature);
+      const accessibility = cell && accessibilityByCell.has(cell)
+        ? accessibilityByCell.get(cell)
+        : 0;
+
+      if (accessibility > 0) {
+        coveredPopulation += population;
+      }
+      weightedAccessibilitySum += population * accessibility;
+
+      const toleratedForStep = getToleratedAccessibilityForStep(accessibility);
+      const step = (Math.round(toleratedForStep * 10) / 10).toFixed(1);
+      stepPopulation.set(step, (stepPopulation.get(step) || 0) + population);
+    }
+
+    const weightedAccessibility = totalPopulation > 0
+      ? weightedAccessibilitySum / totalPopulation
+      : 0;
+
+    const rows = [...stepsAsc].reverse().map((step) => {
+      const population = stepPopulation.get(step) || 0;
+      const percentage = totalPopulation > 0
+        ? (population / totalPopulation) * 100
+        : 0;
+      return { step, population, percentage };
+    });
+
+    return {
+      hasData: true,
+      totalPopulation,
+      coveredPopulation,
+      weightedAccessibility,
+      rows,
+    };
+  }, [h3PopulationLayer, h3AccessibilityLayer]);
 
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-slate-900 font-sans text-slate-900">
@@ -534,10 +668,11 @@ export default function UrbanLayoutApp() {
               style={() => ({
                 fillColor: 'transparent',
                 fillOpacity: 0,
-                weight: 2,
-                color: '#5C3317',
-                opacity: 1.0,
-                dashArray: '5,5',
+                weight: 1.5,
+                color: '#6B4E2E',
+                opacity: 0.75,
+                lineJoin: 'round',
+                lineCap: 'round',
               })}
             />
           )}
@@ -825,66 +960,119 @@ export default function UrbanLayoutApp() {
           5. RIGHT-SIDE OVERLAY (Map Filters)
           Z-Index: 40
       ========================================= */}
-      <div className={`absolute top-40 right-4 w-64 bg-white/60 backdrop-blur-md rounded-2xl shadow-xl border border-slate-200 z-40 p-5 transition-all duration-300 origin-top-right ${rightPanelOpen ? 'opacity-100 scale-100' : 'opacity-0 scale-95 pointer-events-none'}`}>
+      <div className={`absolute top-24 right-4 w-64 max-h-[calc(100vh-12rem)] overflow-y-auto bg-white/60 backdrop-blur-md rounded-2xl shadow-xl border border-slate-200 z-40 p-5 transition-all duration-300 origin-top-right ${rightPanelOpen ? 'opacity-100 scale-100' : 'opacity-0 scale-95 pointer-events-none'}`}>
          <div className="flex justify-between items-center mb-4">
            <h3 className="font-bold text-sm text-slate-800 flex items-center gap-2">
-             <Settings className="w-4 h-4" /> Map Controls
+             <Settings className="w-4 h-4" /> Map Panel
            </h3>
            <button onClick={() => setRightPanelOpen(false)} className="text-slate-400 hover:text-slate-600">
              <X className="w-4 h-4" />
            </button>
          </div>
 
-         {/* Filter: Data Layers */}
-         <div className="mb-6 space-y-3">
-           <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-2">
-             <Database className="w-3 h-3" /> Data Layers
-           </label>
-           <div className="flex flex-col gap-2">
-             <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
-               <input type="checkbox" className="rounded text-blue-600 focus:ring-blue-500" defaultChecked />
-               Political Borders
-             </label>
-             <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
-               <input type="checkbox" className="rounded text-blue-600 focus:ring-blue-500" />
-               Traffic Density
-             </label>
-           </div>
-         </div>
-
-         {/* Filter: Time Slider */}
+         {/* Coverage: Max Distance */}
          <div className="mb-6">
            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-2 mb-3">
-             <Clock className="w-3 h-3" /> Time Range
+             <Clock className="w-3 h-3" /> Max Distance
            </label>
-           <input 
-             type="range" 
-             min="0" max="100" 
-             value={timeRange}
-             onChange={(e) => setTimeRange(e.target.value)}
+           <div className="text-sm text-slate-700 font-medium mb-2">
+             {(maxDistance / 1000).toFixed(0)} km
+           </div>
+           <input
+             type="range"
+             min="10000"
+             max="100000"
+             step="1000"
+             value={maxDistance}
+             onChange={(e) => setMaxDistance(Number(e.target.value))}
              className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
            />
            <div className="flex justify-between text-[10px] text-slate-400 mt-1">
-             <span>Past</span>
-             <span>Now</span>
-             <span>Future</span>
+             <span>10 km</span>
+             <span>100 km</span>
            </div>
          </div>
 
-         {/* Filter: Popularity */}
-         <div>
+         {/* Coverage: Elasticity */}
+         <div className="mb-6">
             <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-2 mb-3">
-             <Activity className="w-3 h-3" /> Popularity
+             <Activity className="w-3 h-3" /> Elasticity
            </label>
-           <div className="flex items-center justify-between p-2 bg-slate-50 rounded-lg border border-slate-100">
-             <span className="text-sm text-slate-600">Heatmap</span>
-             <button 
-               onClick={() => setPopularity(!popularity)}
-               className={`w-10 h-5 rounded-full p-0.5 transition-colors ${popularity ? 'bg-blue-600' : 'bg-slate-300'}`}
-             >
-               <div className={`w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${popularity ? 'translate-x-5' : 'translate-x-0'}`} />
-             </button>
+           <div className="text-sm text-slate-700 font-medium mb-2">
+             {elasticity.toFixed(1)} (sensibility to distance)
            </div>
+           <input
+             type="range"
+             min="0.1"
+             max="2"
+             step="0.1"
+             value={elasticity}
+             onChange={(e) => setElasticity(Number(e.target.value))}
+             className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+           />
+           <div className="flex justify-between text-[10px] text-slate-400 mt-1">
+             <span>0.1 not sensible</span>
+             <span>2.0 very sensible</span>
+           </div>
+         </div>
+
+         {/* Population Coverage Stats (always visible) */}
+         <div className="space-y-3 border-t border-slate-200 pt-3">
+           <p className="text-xs text-slate-500">
+             Population by coverage step (accessibility 0.0 to 1.0), computed from H3 population and current coverage.
+           </p>
+
+           {!coveragePopulationStats.hasData && (
+             <div className="text-sm text-slate-500 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+               Run a search to view coverage statistics.
+             </div>
+           )}
+
+           {coveragePopulationStats.hasData && (
+             <>
+               <div className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 space-y-1">
+                 <div className="flex justify-between text-xs text-slate-600">
+                   <span>Total Population</span>
+                   <span className="font-semibold text-slate-700">{Math.round(coveragePopulationStats.totalPopulation).toLocaleString()}</span>
+                 </div>
+                 <div className="flex justify-between text-xs text-slate-600">
+                   <span>Covered (&gt; 0.0)</span>
+                   <span className="font-semibold text-slate-700">
+                     {coveragePopulationStats.totalPopulation > 0
+                       ? ((coveragePopulationStats.coveredPopulation / coveragePopulationStats.totalPopulation) * 100).toFixed(1)
+                       : '0.0'}%
+                   </span>
+                 </div>
+                 <div className="flex justify-between text-xs text-slate-600">
+                   <span>Weighted Accessibility</span>
+                   <span className="font-semibold text-slate-700">{coveragePopulationStats.weightedAccessibility.toFixed(2)}</span>
+                 </div>
+               </div>
+
+               <div className="pr-1 space-y-1">
+                 {coveragePopulationStats.rows.map((row) => {
+                   const hue = Number(row.step) * 120;
+                   return (
+                     <div key={`coverage-step-${row.step}`}>
+                       <div className="flex justify-between text-xs text-slate-700">
+                         <span>Step {row.step}</span>
+                         <span>{row.percentage.toFixed(1)}%</span>
+                       </div>
+                       <div className="h-1.5 bg-slate-200 rounded mt-1 overflow-hidden">
+                         <div
+                           className="h-full"
+                           style={{
+                             width: `${Math.max(0, Math.min(100, row.percentage))}%`,
+                             backgroundColor: `hsl(${hue}, 75%, 45%)`,
+                           }}
+                         />
+                       </div>
+                     </div>
+                   );
+                 })}
+               </div>
+             </>
+           )}
          </div>
       </div>
 

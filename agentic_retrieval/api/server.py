@@ -11,7 +11,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # Add parent directories to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -24,7 +24,7 @@ _RESULTS_PATH = Path(__file__).parent.parent.parent / "geoprocessing" / "results
 _H3_RESOLUTION = 5
 _REFERENCE_DISTANCE = 1000
 _MAX_DISTANCE = 80000
-_ELASTICITY = 0.5
+_ELASTICITY = 0.1
 
 # Module-level caches — static data that never changes between requests
 _aoi_cache = None
@@ -76,15 +76,19 @@ def _to_geojson_wgs84(gdf):
     return json.loads(gdf.to_json())
 
 
-def _run_coverage(facilities_gdf):
+def _run_coverage(
+    facilities_gdf,
+    max_distance: int = _MAX_DISTANCE,
+    elasticity: float = _ELASTICITY,
+):
     """Run coverage analysis on a facilities GeoDataFrame. Returns (iso_geojson, h3_geojson)."""
     import geoprocessing
     import h3_utils
     result = geoprocessing.coverage(
         facilities_gdf,
-        elasticity=_ELASTICITY,
+        elasticity=elasticity,
         reference_distance=_REFERENCE_DISTANCE,
-        max_distance=_MAX_DISTANCE,
+        max_distance=max_distance,
         pop_h3=None,
         h3_resolution=_H3_RESOLUTION,
     )
@@ -96,7 +100,11 @@ def _run_coverage(facilities_gdf):
     return iso_geojson, h3_geojson
 
 
-def run_coverage_pipeline(query: str):
+def run_coverage_pipeline(
+    query: str,
+    max_distance: int = _MAX_DISTANCE,
+    elasticity: float = _ELASTICITY,
+):
     """
     Run the full geoprocessing pipeline and return all GeoJSON layers.
     Caches facilities_gdf for subsequent /coverage/recompute calls.
@@ -118,7 +126,11 @@ def run_coverage_pipeline(query: str):
     _last_facilities_gdf = facilities_gdf.copy()
 
     # Run coverage analysis
-    iso_geojson, h3_geojson = _run_coverage(facilities_gdf)
+    iso_geojson, h3_geojson = _run_coverage(
+        facilities_gdf,
+        max_distance=max_distance,
+        elasticity=elasticity,
+    )
 
     return {
         "aoi": aoi,
@@ -128,8 +140,8 @@ def run_coverage_pipeline(query: str):
         "config": {
             "h3_resolution": _H3_RESOLUTION,
             "reference_distance": _REFERENCE_DISTANCE,
-            "max_distance": _MAX_DISTANCE,
-            "elasticity": _ELASTICITY,
+            "max_distance": max_distance,
+            "elasticity": elasticity,
         }
     }
 
@@ -156,10 +168,14 @@ app.add_middleware(
 
 class SearchRequest(BaseModel):
     query: str
+    max_distance: int = Field(default=_MAX_DISTANCE, ge=10000, le=100000)
+    elasticity: float = Field(default=_ELASTICITY, ge=0.1, le=2.0)
 
 
 class RecomputeRequest(BaseModel):
     min_stars: int = 1
+    max_distance: int = Field(default=_MAX_DISTANCE, ge=10000, le=100000)
+    elasticity: float = Field(default=_ELASTICITY, ge=0.1, le=2.0)
 
 
 class FacilityResult(BaseModel):
@@ -233,7 +249,11 @@ async def search_with_coverage(request: SearchRequest):
         raise HTTPException(status_code=400, detail="Query cannot be empty")
     
     try:
-        result = run_coverage_pipeline(request.query)
+        result = run_coverage_pipeline(
+            request.query,
+            max_distance=request.max_distance,
+            elasticity=request.elasticity,
+        )
 
         if result is None:
             return {
@@ -282,7 +302,11 @@ async def recompute_coverage(request: RecomputeRequest):
         if filtered.empty:
             return {"layers": {"isochrones": None, "h3_accessibility": None}}
 
-        iso_geojson, h3_geojson = _run_coverage(filtered)
+        iso_geojson, h3_geojson = _run_coverage(
+            filtered,
+            max_distance=request.max_distance,
+            elasticity=request.elasticity,
+        )
         return {
             "layers": {
                 "isochrones": iso_geojson,
@@ -365,5 +389,3 @@ async def list_coverage_layers():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
-
-

@@ -479,7 +479,7 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
   const [showLayers, setShowLayers] = useState(false);
-  const [mapLayer, setMapLayer] = useState('satellite');
+  const [mapLayer, setMapLayer] = useState('standard');
   
   // Expandable sidebar cards
   const [expandedId, setExpandedId] = useState(null);
@@ -813,7 +813,6 @@ export default function App() {
   const handleAreaSelectionClick = () => {
     setIsDrawingMode(true);
     setSidebarOpen(false);
-    setRightPanelOpen(false);
   };
 
   const handleDrawCreated = (layer) => {
@@ -851,11 +850,6 @@ export default function App() {
 
   // Recompute coverage when the star filter or coverage parameters change
   useEffect(() => {
-    if (minConfidence === 1) {
-      if (origIsochronesLayer) setIsochronesLayer(origIsochronesLayer);
-      if (origH3AccessibilityLayer) setH3AccessibilityLayer(origH3AccessibilityLayer);
-      return;
-    }
     if (!facilitiesLayer) return;
 
     const isAtBaseParams =
@@ -921,6 +915,7 @@ export default function App() {
     if (!popFeatures.length) {
       return {
         hasData: false,
+        isAoiFiltered: false,
         totalPopulation: 0,
         coveredPopulation: 0,
         weightedAccessibility: 0,
@@ -947,6 +942,86 @@ export default function App() {
     const stepsAsc = Array.from({ length: 11 }, (_, idx) => (idx / 10).toFixed(1));
     const stepPopulation = new Map(stepsAsc.map((step) => [step, 0]));
 
+    const pointInRing = (lon, lat, ring) => {
+      if (!Array.isArray(ring) || ring.length < 4) return false;
+      let inside = false;
+      for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        const [xi, yi] = ring[i] || [];
+        const [xj, yj] = ring[j] || [];
+        if (![xi, yi, xj, yj].every(Number.isFinite)) continue;
+        const intersects = ((yi > lat) !== (yj > lat))
+          && (lon < ((xj - xi) * (lat - yi)) / ((yj - yi) || Number.EPSILON) + xi);
+        if (intersects) inside = !inside;
+      }
+      return inside;
+    };
+
+    const pointInPolygonWithHoles = (lon, lat, polygonRings) => {
+      if (!Array.isArray(polygonRings) || !polygonRings.length) return false;
+      if (!pointInRing(lon, lat, polygonRings[0])) return false;
+      for (let i = 1; i < polygonRings.length; i += 1) {
+        if (pointInRing(lon, lat, polygonRings[i])) return false;
+      }
+      return true;
+    };
+
+    const getFeatureCenterLonLat = (geometry) => {
+      if (!geometry) return null;
+      if (geometry.type === 'Point') {
+        const [lon, lat] = geometry.coordinates || [];
+        return Number.isFinite(lon) && Number.isFinite(lat) ? [lon, lat] : null;
+      }
+
+      let minLon = Infinity;
+      let minLat = Infinity;
+      let maxLon = -Infinity;
+      let maxLat = -Infinity;
+
+      const visit = (coords) => {
+        if (!Array.isArray(coords)) return;
+        if (coords.length === 2 && typeof coords[0] === 'number' && typeof coords[1] === 'number') {
+          const [lon, lat] = coords;
+          if (!Number.isFinite(lon) || !Number.isFinite(lat)) return;
+          minLon = Math.min(minLon, lon);
+          maxLon = Math.max(maxLon, lon);
+          minLat = Math.min(minLat, lat);
+          maxLat = Math.max(maxLat, lat);
+          return;
+        }
+        for (const child of coords) visit(child);
+      };
+
+      visit(geometry.coordinates);
+      if (![minLon, minLat, maxLon, maxLat].every(Number.isFinite)) return null;
+      return [(minLon + maxLon) / 2, (minLat + maxLat) / 2];
+    };
+
+    const aoiPolygons = [];
+    for (const feature of aoi?.features || []) {
+      const geometry = feature?.geometry;
+      if (!geometry) continue;
+
+      if (geometry.type === 'Polygon') {
+        aoiPolygons.push(geometry.coordinates || []);
+        continue;
+      }
+      if (geometry.type === 'MultiPolygon') {
+        for (const polygon of geometry.coordinates || []) {
+          aoiPolygons.push(polygon || []);
+        }
+      }
+    }
+
+    const isAoiFiltered = aoiPolygons.length > 0;
+    const scopedPopFeatures = isAoiFiltered
+      ? popFeatures.filter((feature) => {
+          const center = getFeatureCenterLonLat(feature.geometry);
+          if (!center) return false;
+          const [lon, lat] = center;
+          return aoiPolygons.some((polygonRings) => pointInPolygonWithHoles(lon, lat, polygonRings));
+        })
+      : popFeatures;
+
     // Tolerance for high-accessibility buckets: helps avoid undercounting
     // near-threshold cells caused by discretization and H3 boundary effects.
     const getToleratedAccessibilityForStep = (value) => {
@@ -962,7 +1037,7 @@ export default function App() {
     let coveredPopulation = 0;
     let weightedAccessibilitySum = 0;
 
-    for (const feature of popFeatures) {
+    for (const feature of scopedPopFeatures) {
       const population = Number(feature.properties?.population) || 0;
       if (!Number.isFinite(population) || population <= 0) continue;
 
@@ -997,12 +1072,13 @@ export default function App() {
 
     return {
       hasData: true,
+      isAoiFiltered,
       totalPopulation,
       coveredPopulation,
       weightedAccessibility,
       rows,
     };
-  }, [h3PopulationLayer, h3AccessibilityLayer]);
+  }, [h3PopulationLayer, h3AccessibilityLayer, aoi]);
 
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-slate-900 font-sans text-slate-900">
@@ -1493,21 +1569,7 @@ export default function App() {
            </button>
          </div>
 
-         <div className="mb-6 space-y-3">
-           <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-2">
-             <Database className="w-3 h-3" /> Data Layers
-           </label>
-           <div className="flex flex-col gap-2">
-             <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
-               <input type="checkbox" className="rounded text-blue-600 focus:ring-blue-500" defaultChecked />
-               Political Borders
-             </label>
-             <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
-               <input type="checkbox" className="rounded text-blue-600 focus:ring-blue-500" />
-               Traffic Density
-             </label>
-           </div>
-         </div>
+         
 
          <div className="mb-6">
            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-2 mb-3">
@@ -1559,6 +1621,11 @@ export default function App() {
            <p className="text-xs text-slate-500">
              Population by coverage step (accessibility 0.0 to 1.0), computed from H3 population and current coverage.
            </p>
+           {coveragePopulationStats.isAoiFiltered && (
+             <p className="text-[11px] text-blue-700 bg-blue-50 border border-blue-100 rounded-lg px-2 py-1">
+               Stats are focused on the drawn area.
+             </p>
+           )}
 
            {!coveragePopulationStats.hasData && (
              <div className="text-sm text-slate-500 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">

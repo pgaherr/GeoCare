@@ -236,6 +236,7 @@ export default function App() {
   const [isDrawingMode, setIsDrawingMode] = useState(false);
   const [aoi, setAoi] = useState(null);
   const featureGroupRef = useRef(null);
+  const drawnLayersRef = useRef([]);
 
   // Mock Settings
   const [timeRange, setTimeRange] = useState(50);
@@ -287,6 +288,7 @@ export default function App() {
       ]
     };
     setAoi(data);
+    drawnLayersRef.current.push(layer);
     setIsDrawingMode(false);
   };
 
@@ -295,13 +297,13 @@ export default function App() {
     if (featureGroupRef.current) {
       featureGroupRef.current.clearLayers();
     }
-    // Refresh map to remove layers added by MapDrawHandler if needed, 
-    // though featureGroupRef handles standard EditControl layers.
-    // For custom layers added via map.addLayer, we might need a reload or state management,
-    // but typically a re-render or clearing the group works if attached.
-    // Simpler: reload page or use state to control visibility. 
-    // Ideally MapDrawHandler adds to a group we can clear.
-    window.location.reload(); // Quick fix to clear map drawings for prototype
+    // Remove all drawn layers from the map
+    drawnLayersRef.current.forEach(layer => {
+      if (layer && layer._map) {
+        layer._map.removeLayer(layer);
+      }
+    });
+    drawnLayersRef.current = [];
   };
 
   const filteredResults = useMemo(() => {

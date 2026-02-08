@@ -17,7 +17,7 @@ import {
   Filter, 
   MapPin,
   Settings,
-  User,
+  HelpCircle,
   ChevronLeft,
   Clock,
   Activity,
@@ -317,10 +317,10 @@ export default function UrbanLayoutApp() {
            </div>
         </div>
 
-        {/* Right: User Profile */}
+        {/* Right: Help Button */}
         <div className="pointer-events-auto">
-          <button className="bg-white p-3 rounded-[20px] shadow-lg border border-slate-200 hover:bg-slate-50 transition-transform hover:scale-105 active:scale-95">
-             <User className="w-5 h-5 text-slate-700" />
+          <button onClick={() => setShowWelcome(true)} className="bg-white p-3 rounded-[20px] shadow-lg border border-slate-200 hover:bg-slate-50 transition-transform hover:scale-105 active:scale-95" title="Help">
+             <HelpCircle className="w-5 h-5 text-slate-700" />
           </button>
         </div>
       </div>

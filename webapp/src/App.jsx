@@ -5,7 +5,9 @@ import {
   Marker, 
   Popup, 
   useMap, 
-  FeatureGroup 
+  FeatureGroup,
+  GeoJSON,
+  CircleMarker
 } from "react-leaflet";
 import { EditControl } from "react-leaflet-draw";
 import L from "leaflet";
@@ -160,13 +162,13 @@ const ConfidenceFilter = ({ value, onChange }) => {
 };
 
 // 3. Map Controller
-function RecenterMap({ lat, lon }) {
+function RecenterMap({ lat, lon, zoom = 7 }) {
   const map = useMap();
   useEffect(() => {
     if (lat && lon) {
-      map.flyTo([lat, lon], 13, { duration: 1.5 });
+      map.flyTo([lat, lon], zoom, { duration: 1.5 });
     }
-  }, [lat, lon, map]);
+  }, [lat, lon, zoom, map]);
   return null;
 }
 
@@ -196,16 +198,36 @@ export default function UrbanLayoutApp() {
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState(null);
 
-  // Search Logic - calls FastAPI backend
+  // Coverage Layers (from pipeline)
+  const [facilitiesLayer, setFacilitiesLayer] = useState(null);
+  const [isochronesLayer, setIsochronesLayer] = useState(null);
+
+  // Isochrone style function - color by accessibility
+  const getIsochroneStyle = (feature) => {
+    const accessibility = parseFloat(feature.properties.accessibility) || 0;
+    // Color scale: red (low) → yellow → green (high)
+    const hue = accessibility * 120; // 0=red, 60=yellow, 120=green
+    return {
+      fillColor: `hsl(${hue}, 70%, 50%)`,
+      fillOpacity: 0.4,
+      weight: 1,
+      color: `hsl(${hue}, 70%, 40%)`,
+      opacity: 0.8,
+    };
+  };
+
+  // Search Logic - calls FastAPI pipeline (ranking + coverage)
   const handleSearch = async (e) => {
     e.preventDefault();
     if (!query.trim()) return;
 
     setIsSearching(true);
     setSearchError(null);
+    setFacilitiesLayer(null);
+    setIsochronesLayer(null);
 
     try {
-      const res = await fetch("http://localhost:8000/search", {
+      const res = await fetch("http://localhost:8000/search/pipeline", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: query.trim() }),
@@ -217,21 +239,38 @@ export default function UrbanLayoutApp() {
       
       const data = await res.json();
       
-      // Map backend response to frontend format
-      const enrichedData = data.map((item, index) => ({
-        place_id: `facility_${index}`,
-        name: item.name,
-        display_name: item.name + (item.reason ? ` — ${item.reason}` : ""),
-        officialWebsite: item.officialWebsite,
-        capabilities: item.capabilities || [],
-        confidenceScore: item.score,
-        // Note: lat/lon not available from backend yet
-        lat: null,
-        lon: null,
+      if (data.error) {
+        throw new Error(data.error);
+      }
+      
+      // Set GeoJSON layers for map
+      if (data.layers?.facilities) {
+        setFacilitiesLayer(data.layers.facilities);
+      }
+      if (data.layers?.isochrones) {
+        setIsochronesLayer(data.layers.isochrones);
+      }
+      
+      // Map facilities to sidebar format
+      const facilities = data.layers?.facilities?.features || [];
+      const enrichedData = facilities.map((f, index) => ({
+        place_id: `facility_${f.properties.pk_unique_id || index}`,
+        name: f.properties.name,
+        display_name: f.properties.name + (f.properties.reason ? ` — ${f.properties.reason}` : ""),
+        officialWebsite: f.properties.officialWebsite,
+        capabilities: f.properties.capabilities || [],
+        confidenceScore: f.properties.stars,
+        lat: f.geometry?.coordinates?.[1],
+        lon: f.geometry?.coordinates?.[0],
       }));
 
       setResults(enrichedData);
       setSidebarOpen(true);
+      
+      // Center map on Ghana if we got results
+      if (enrichedData.length > 0) {
+        setMapPosition([7.9, -1.0]); // Center of Ghana
+      }
     } catch (error) {
       console.error("Search error:", error);
       setSearchError(error.message);
@@ -270,8 +309,62 @@ export default function UrbanLayoutApp() {
           
           <RecenterMap lat={mapPosition[0]} lon={mapPosition[1]} />
 
-          {/* Render Markers for Filtered Results */}
-          {filteredResults.map((place) => (
+          {/* Isochrone Coverage Layer */}
+          {isochronesLayer && (
+            <GeoJSON
+              key={`isochrones-${Date.now()}`}
+              data={isochronesLayer}
+              style={getIsochroneStyle}
+            />
+          )}
+
+          {/* Facility Markers from GeoJSON */}
+          {facilitiesLayer && facilitiesLayer.features?.map((feature, idx) => {
+            const coords = feature.geometry?.coordinates;
+            if (!coords) return null;
+            const stars = feature.properties?.stars || 0;
+            // Color by star rating: 5=green, 3=yellow, 1=red
+            const hue = (stars / 5) * 120;
+            return (
+              <CircleMarker
+                key={`facility-${feature.properties?.pk_unique_id || idx}`}
+                center={[coords[1], coords[0]]}
+                radius={8 + stars}
+                pathOptions={{
+                  fillColor: `hsl(${hue}, 70%, 50%)`,
+                  fillOpacity: 0.9,
+                  weight: 2,
+                  color: 'white',
+                }}
+              >
+                <Popup>
+                  <div className="p-2">
+                    <strong className="block mb-1 text-lg">{feature.properties?.name}</strong>
+                    <div className="flex items-center gap-1 mb-2">
+                      {[...Array(5)].map((_, i) => (
+                        <Star key={i} className={`w-4 h-4 ${i < stars ? 'fill-yellow-400 text-yellow-400' : 'text-gray-300'}`} />
+                      ))}
+                      <span className="ml-1 text-sm text-gray-600">({stars}/5)</span>
+                    </div>
+                    <p className="text-sm text-gray-600 mb-2">{feature.properties?.reason}</p>
+                    {feature.properties?.officialWebsite && (
+                      <a 
+                        href={`https://${feature.properties.officialWebsite}`} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="text-blue-600 hover:underline text-sm"
+                      >
+                        {feature.properties.officialWebsite}
+                      </a>
+                    )}
+                  </div>
+                </Popup>
+              </CircleMarker>
+            );
+          })}
+
+          {/* Legacy Markers for Filtered Results (fallback) */}
+          {filteredResults.filter(p => p.lat && p.lon).map((place) => (
             <Marker 
               key={place.place_id} 
               position={[parseFloat(place.lat), parseFloat(place.lon)]}

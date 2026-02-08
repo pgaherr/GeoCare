@@ -34,15 +34,6 @@ footer: " "
 
 ---
 
-<!-- _class: light -->
-
-# Light Theme Toggle
-- Background is now white.
-- Footer line, text, and pagination are black.
-- Logos switch to light-mode versions.
-
----
-
 # Background Image Layout
 
 ![bg brightness:0.5](https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=1600)
@@ -65,5 +56,7 @@ footer: " "
 # Questions?
 ## Thank you.
 
-Someone's name
-Contact: name@email.com
+Alejandro Astudillo Aguiar
+Ainhoa Alba de Jesús
+Miguel Ureña Pliego
+Patricia García Herreros

@@ -14,6 +14,7 @@
     "@turf/helpers": "^7.3.4",
     "@turf/union": "^7.3.4",
     "leaflet": "^1.9.4",
+    "leaflet-draw": "^1.0.4",
     "lucide-react": "^0.563.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
